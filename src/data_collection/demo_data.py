@@ -140,17 +140,20 @@ def generate_demo_route_conditions(
     """
     hours = forecast_days * 24
 
-    if scenario == "auto":
+    # Resolve scenario key from DEMO_SCENARIOS if needed
+    resolved = DEMO_SCENARIOS.get(scenario, {}).get("scenario", scenario)
+
+    if resolved == "auto":
         month = datetime.now().month
         base_wind = MONTHLY_WIND_AVG.get(month, 15)
         storm_prob = 0.3 if month in (7, 8) else 0.15
-    elif scenario == "calm":
+    elif resolved == "calm":
         base_wind = 8
         storm_prob = 0.0
-    elif scenario == "storm":
+    elif resolved == "storm":
         base_wind = 22
         storm_prob = 0.95
-    elif scenario == "meltemi":
+    elif resolved == "meltemi":
         base_wind = 28
         storm_prob = 0.5
     else:
