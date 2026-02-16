@@ -1,0 +1,278 @@
+"""
+FastAPI web interface for the Maritime Intelligence Platform.
+
+Run with:
+    pip install fastapi uvicorn
+    python -m uvicorn src.web.app:app --reload --port 8000
+"""
+
+from datetime import datetime
+
+try:
+    from fastapi import FastAPI, Query
+    from fastapi.responses import HTMLResponse, JSONResponse
+except ImportError:
+    raise ImportError(
+        "FastAPI is required for the web interface. "
+        "Install with: pip install fastapi uvicorn"
+    )
+
+from src.config.constants import ROUTES, PORTS, VESSEL_TYPES, BEAUFORT_SCALE, knots_to_beaufort
+from src.services.sailing_ban_checker import SailingBanChecker
+from src.data_collection.demo_data import generate_demo_route_conditions, DEMO_SCENARIOS
+
+app = FastAPI(
+    title="Greek Maritime Intelligence Platform",
+    description="Ferry cancellation prediction from sea-state and wind conditions",
+    version="0.1.0",
+)
+
+checker = SailingBanChecker()
+
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    """Serve the main dashboard page with route map."""
+    return MAP_HTML
+
+
+@app.get("/api/routes")
+def list_routes():
+    """List all configured routes with port coordinates."""
+    result = []
+    for route_id, info in ROUTES.items():
+        origin_code, dest_code = route_id.split("-")
+        origin = PORTS.get(origin_code, {})
+        dest = PORTS.get(dest_code, {})
+        result.append({
+            "id": route_id,
+            "origin": {**info, "code": origin_code, "lat": origin.get("lat"), "lon": origin.get("lon")},
+            "destination": {"code": dest_code, "name": info["destination"], "lat": dest.get("lat"), "lon": dest.get("lon")},
+            "distance_nm": info["distance_nm"],
+            "sea_area": info["sea_area"],
+            "exposed": info.get("exposed", True),
+        })
+    return result
+
+
+@app.get("/api/check")
+def check_routes(
+    vessel: str = Query("CONVENTIONAL", description="Vessel type"),
+    scenario: str = Query("auto", description="Demo scenario: calm, storm, meltemi, auto"),
+    days: int = Query(2, ge=1, le=7, description="Forecast days"),
+):
+    """Check all routes using demo data (no internet required)."""
+    results = []
+    for route_id, route_info in ROUTES.items():
+        weather_data = generate_demo_route_conditions(
+            forecast_days=days, scenario=scenario,
+        )
+        result = checker.check_route(route_id, weather_data, vessel)
+
+        # Add summary stats
+        hourly = result.get("hourly", [])
+        result["max_wind"] = max((h["wind_speed_knots"] for h in hourly), default=0)
+        result["max_wave"] = max((h["wave_height_m"] for h in hourly), default=0)
+        result["max_beaufort"] = knots_to_beaufort(result["max_wind"])
+
+        # Don't send full hourly in list view
+        result["hourly_count"] = len(hourly)
+        del result["hourly"]
+        results.append(result)
+
+    status_order = {"BAN_LIKELY": 0, "AT_RISK": 1, "CLEAR": 2}
+    results.sort(key=lambda r: status_order.get(r["overall_status"], 3))
+
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "vessel_type": vessel,
+        "scenario": scenario,
+        "forecast_days": days,
+        "routes": results,
+        "summary": {
+            "total": len(results),
+            "ban_likely": sum(1 for r in results if r["overall_status"] == "BAN_LIKELY"),
+            "at_risk": sum(1 for r in results if r["overall_status"] == "AT_RISK"),
+            "clear": sum(1 for r in results if r["overall_status"] == "CLEAR"),
+        },
+    }
+
+
+@app.get("/api/check/{route_id}")
+def check_single_route(
+    route_id: str,
+    vessel: str = Query("CONVENTIONAL"),
+    scenario: str = Query("auto"),
+    days: int = Query(2, ge=1, le=7),
+):
+    """Check a single route with full hourly details."""
+    if route_id not in ROUTES:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Unknown route: {route_id}", "available": list(ROUTES.keys())},
+        )
+
+    weather_data = generate_demo_route_conditions(forecast_days=days, scenario=scenario)
+    return checker.check_route(route_id, weather_data, vessel)
+
+
+@app.get("/api/scenarios")
+def list_scenarios():
+    """List available demo scenarios."""
+    return DEMO_SCENARIOS
+
+
+@app.get("/api/ports")
+def list_ports():
+    """List all ports with coordinates."""
+    return PORTS
+
+
+# ---------------------------------------------------------------------------
+# Embedded HTML dashboard with Leaflet.js map
+# ---------------------------------------------------------------------------
+MAP_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Maritime Intelligence Platform</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+         background: #0a1628; color: #e0e0e0; }
+  #header { background: #1a2a4a; padding: 12px 24px; display: flex;
+            justify-content: space-between; align-items: center; }
+  #header h1 { font-size: 18px; color: #4fc3f7; }
+  #controls { display: flex; gap: 12px; align-items: center; }
+  select, button { padding: 6px 12px; border-radius: 4px; border: 1px solid #345;
+                   background: #1e3050; color: #e0e0e0; font-size: 13px; cursor: pointer; }
+  button { background: #2196F3; border: none; font-weight: bold; }
+  button:hover { background: #1976D2; }
+  #map { height: calc(100vh - 200px); }
+  #summary { background: #0d1f3c; padding: 12px 24px; display: flex;
+             gap: 24px; align-items: center; font-size: 14px; }
+  .stat { display: flex; align-items: center; gap: 6px; }
+  .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .dot-red { background: #f44336; }
+  .dot-yellow { background: #ff9800; }
+  .dot-green { background: #4caf50; }
+  #table-wrap { max-height: 160px; overflow-y: auto; background: #0d1f3c; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #1a2a4a; position: sticky; top: 0; padding: 6px 12px;
+       text-align: left; color: #90caf9; }
+  td { padding: 5px 12px; border-bottom: 1px solid #1a2a4a; }
+  .status-BAN_LIKELY { color: #f44336; font-weight: bold; }
+  .status-AT_RISK { color: #ff9800; font-weight: bold; }
+  .status-CLEAR { color: #4caf50; }
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>Greek Maritime Intelligence Platform</h1>
+  <div id="controls">
+    <select id="vessel">
+      <option value="CONVENTIONAL">Conventional</option>
+      <option value="HIGH_SPEED">High Speed</option>
+      <option value="CATAMARAN">Catamaran</option>
+      <option value="SMALL">Small Craft</option>
+    </select>
+    <select id="scenario">
+      <option value="auto">Auto (seasonal)</option>
+      <option value="calm">Calm</option>
+      <option value="storm">Storm</option>
+      <option value="meltemi">Meltemi</option>
+    </select>
+    <button onclick="refresh()">Refresh</button>
+  </div>
+</div>
+<div id="map"></div>
+<div id="summary"></div>
+<div id="table-wrap"><table><thead><tr>
+  <th>Route</th><th>From</th><th>To</th><th>Status</th>
+  <th>Max Wind</th><th>Max Wave</th><th>Beaufort</th>
+</tr></thead><tbody id="tbody"></tbody></table></div>
+
+<script>
+const map = L.map('map').setView([37.5, 25.0], 7);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: 'CartoDB', maxZoom: 18
+}).addTo(map);
+
+let routeLines = [];
+let portMarkers = [];
+
+const colors = { BAN_LIKELY: '#f44336', AT_RISK: '#ff9800', CLEAR: '#4caf50' };
+
+async function refresh() {
+  const vessel = document.getElementById('vessel').value;
+  const scenario = document.getElementById('scenario').value;
+  const resp = await fetch('/api/check?vessel=' + vessel + '&scenario=' + scenario);
+  const data = await resp.json();
+  const ports = await (await fetch('/api/ports')).json();
+  const routeDefs = await (await fetch('/api/routes')).json();
+
+  routeLines.forEach(l => map.removeLayer(l));
+  portMarkers.forEach(m => map.removeLayer(m));
+  routeLines = [];
+  portMarkers = [];
+
+  const s = data.summary;
+  document.getElementById('summary').innerHTML =
+    '<span><b>' + data.routes.length + ' routes</b> checked | ' +
+    data.scenario + ' scenario | ' + data.vessel_type + '</span>' +
+    '<span class="stat"><span class="dot dot-red"></span> Ban: ' + s.ban_likely + '</span>' +
+    '<span class="stat"><span class="dot dot-yellow"></span> Risk: ' + s.at_risk + '</span>' +
+    '<span class="stat"><span class="dot dot-green"></span> Clear: ' + s.clear + '</span>';
+
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = '';
+
+  const drawnPorts = {};
+  data.routes.forEach(r => {
+    const rd = routeDefs.find(d => d.id === r.route_id);
+    if (!rd || !rd.origin.lat) return;
+
+    const color = colors[r.overall_status] || '#888';
+    const line = L.polyline(
+      [[rd.origin.lat, rd.origin.lon], [rd.destination.lat, rd.destination.lon]],
+      { color, weight: 3, opacity: 0.8 }
+    ).addTo(map).bindPopup(
+      '<b>' + r.route_name + '</b><br>Status: ' + r.overall_status +
+      '<br>Wind: ' + r.max_wind.toFixed(0) + ' kn (Bf ' + r.max_beaufort + ')' +
+      '<br>Wave: ' + r.max_wave.toFixed(1) + ' m'
+    );
+    routeLines.push(line);
+
+    [[rd.origin.code, rd.origin.lat, rd.origin.lon, rd.origin.origin],
+     [rd.destination.code, rd.destination.lat, rd.destination.lon, rd.destination.name]
+    ].forEach(([code, lat, lon, name]) => {
+      if (!drawnPorts[code] && lat) {
+        const m = L.circleMarker([lat, lon], {
+          radius: 6, fillColor: '#4fc3f7', fillOpacity: 0.9,
+          color: '#fff', weight: 1
+        }).addTo(map).bindTooltip(name || code);
+        portMarkers.push(m);
+        drawnPorts[code] = true;
+      }
+    });
+
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td>' + r.route_id + '</td>' +
+      '<td>' + r.route_name.split(' → ')[0] + '</td>' +
+      '<td>' + r.route_name.split(' → ')[1] + '</td>' +
+      '<td class="status-' + r.overall_status + '">' + r.overall_status + '</td>' +
+      '<td>' + r.max_wind.toFixed(0) + ' kn</td>' +
+      '<td>' + r.max_wave.toFixed(1) + ' m</td>' +
+      '<td>' + r.max_beaufort + '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+refresh();
+</script>
+</body>
+</html>"""
