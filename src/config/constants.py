@@ -28,10 +28,11 @@ BEAUFORT_SCALE = {
 
 def knots_to_beaufort(knots: float) -> int:
     """Convert wind speed in knots to Beaufort number."""
+    result = 0
     for bf, (lo, hi, _) in BEAUFORT_SCALE.items():
-        if lo <= knots <= hi:
-            return bf
-    return 12
+        if knots >= lo:
+            result = bf
+    return result
 
 
 def kmh_to_knots(kmh: float) -> float:

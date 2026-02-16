@@ -1,0 +1,15 @@
+# Greek Maritime Intelligence Platform
+
+# Core (always needed)
+pytest>=7.0
+
+# ML models (for --train-ml)
+scikit-learn>=1.3
+
+# Web dashboard (for --web)
+fastapi>=0.100
+uvicorn>=0.23
+
+# Future phases:
+# pandas>=2.0          # data processing
+# xgboost>=2.0         # gradient boosting (alternative to sklearn GB)
