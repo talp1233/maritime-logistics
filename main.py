@@ -9,9 +9,13 @@ Usage:
     python main.py --scenario storm         # Demo scenario: calm/storm/meltemi/auto
     python main.py --days 2                 # Forecast days (1-7)
     python main.py --live                   # Use live API (requires internet)
+    python main.py --ml                     # Enable ML predictions alongside rules
+    python main.py --notify                 # Send Telegram alert if risks found
     python main.py --test-api               # Test API connectivity only
-    python main.py --train-ml               # Train ML models
+    python main.py --train-ml               # Train ML models (synthetic data)
+    python main.py --train-ml-gt            # Train ML from ground truth CSV
     python main.py --generate-data          # Generate sample ground truth data
+    python main.py --calibrate              # Calibrate thresholds from ground truth
     python main.py --web                    # Launch web dashboard
 """
 
@@ -112,15 +116,16 @@ def check_single_route(route_id, args):
     if not route_info:
         print(f"Error: Unknown route '{route_id}'")
         print(f"Available routes: {', '.join(sorted(ROUTES.keys()))}")
-        return
+        return None
 
     mode = "LIVE" if args.live else f"DEMO ({args.scenario})"
+    ml_label = " + ML" if args.ml else ""
     print(f"Route: {route_info['origin']} -> {route_info['destination']} "
           f"({route_info['distance_nm']} nm)")
     print(f"Sea area: {route_info['sea_area']} "
           f"({'exposed' if route_info.get('exposed') else 'sheltered'})")
     print(f"Vessel type: {args.vessel} -> {VESSEL_TYPES.get(args.vessel, 'conventional')}")
-    print(f"Mode: {mode} | Forecast: {args.days} days")
+    print(f"Mode: {mode}{ml_label} | Forecast: {args.days} days")
     print()
 
     try:
@@ -130,18 +135,28 @@ def check_single_route(route_id, args):
         if not args.live:
             raise
         print("Hint: try without --live to use demo data")
-        return
+        return None
 
-    checker = SailingBanChecker()
+    checker = SailingBanChecker(use_ml=args.ml)
     result = checker.check_route(route_id, weather_data, args.vessel)
 
     symbol = STATUS_SYMBOLS[result["overall_status"]]
     print(f"Overall status: {symbol} {result['overall_status']}")
+
+    # Show ML prediction if available
+    if "ml_overall_status" in result:
+        ml_sym = STATUS_SYMBOLS[result["ml_overall_status"]]
+        print(f"ML prediction:  {ml_sym} {result['ml_overall_status']} "
+              f"(max cancel prob: {result['ml_max_cancel_probability']:.1%})")
+
     print()
+    header = f"{'Time':<18} {'Status':<14} {'Wind (kn)':<12} {'Bf':<5} {'Wave (m)':<10}"
+    if args.ml:
+        header += f"{'ML Prob':<8}"
     print("Hourly breakdown:")
-    print("-" * 72)
-    print(f"{'Time':<18} {'Status':<14} {'Wind (kn)':<12} {'Bf':<5} {'Wave (m)':<10}")
-    print("-" * 72)
+    print("-" * (72 + (8 if args.ml else 0)))
+    print(header)
+    print("-" * (72 + (8 if args.ml else 0)))
 
     current_date = None
     for h in result["hourly"]:
@@ -153,21 +168,27 @@ def check_single_route(route_id, args):
 
         hour = time_str[11:16]
         sym = STATUS_SYMBOLS[h["status"]]
-        print(f"  {hour}         {sym} {h['status']:<11} {h['wind_speed_knots']:>6.1f}      "
-              f"{h['beaufort']:<4} {h['wave_height_m']:>6.1f}")
+        line = (f"  {hour}         {sym} {h['status']:<11} {h['wind_speed_knots']:>6.1f}      "
+                f"{h['beaufort']:<4} {h['wave_height_m']:>6.1f}")
+        if args.ml and "ml_cancel_probability" in h:
+            line += f"    {h['ml_cancel_probability']:.0%}"
+        print(line)
+
+    return result
 
 
 def check_all_routes(args):
     """Check all configured routes and print a summary table."""
     mode = "LIVE" if args.live else f"DEMO ({args.scenario})"
+    ml_label = " + ML" if args.ml else ""
     print("=" * 64)
     print("  GREEK MARITIME INTELLIGENCE PLATFORM")
     print(f"  Sailing Ban Forecast -- {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    print(f"  Vessel: {args.vessel} | Mode: {mode} | Forecast: {args.days} day(s)")
+    print(f"  Vessel: {args.vessel} | Mode: {mode}{ml_label} | Forecast: {args.days} day(s)")
     print("=" * 64)
     print()
 
-    checker = SailingBanChecker()
+    checker = SailingBanChecker(use_ml=args.ml)
     results = []
 
     for route_id, route_info in ROUTES.items():
@@ -183,7 +204,11 @@ def check_all_routes(args):
             result = checker.check_route(route_id, weather_data, args.vessel)
             results.append(result)
             sym = STATUS_SYMBOLS[result["overall_status"]]
-            print(f"{sym} {result['overall_status']}")
+            ml_info = ""
+            if "ml_overall_status" in result:
+                ml_sym = STATUS_SYMBOLS[result["ml_overall_status"]]
+                ml_info = f" | ML: {ml_sym} {result['ml_max_cancel_probability']:.0%}"
+            print(f"{sym} {result['overall_status']}{ml_info}")
         except Exception as e:
             print(f"[ERR] {e}")
 
@@ -193,8 +218,12 @@ def check_all_routes(args):
     print("  SUMMARY")
     print("=" * 64)
     print()
-    print(f"{'Route':<10} {'From':<14} {'To':<14} {'Status':<14} {'Max Wind':<10} {'Max Wave'}")
-    print("-" * 72)
+
+    header = f"{'Route':<10} {'From':<14} {'To':<14} {'Status':<14} {'Max Wind':<10} {'Max Wave'}"
+    if args.ml:
+        header += f"  {'ML Prob'}"
+    print(header)
+    print("-" * (72 + (10 if args.ml else 0)))
 
     status_order = {"BAN_LIKELY": 0, "AT_RISK": 1, "CLEAR": 2}
     results.sort(key=lambda r: status_order.get(r["overall_status"], 3))
@@ -205,8 +234,11 @@ def check_all_routes(args):
         sym = STATUS_SYMBOLS[r["overall_status"]]
 
         route = ROUTES[r["route_id"]]
-        print(f"{r['route_id']:<10} {route['origin']:<14} {route['destination']:<14} "
-              f"{sym} {r['overall_status']:<10} {max_wind:>5.1f} kn   {max_wave:>5.1f} m")
+        line = (f"{r['route_id']:<10} {route['origin']:<14} {route['destination']:<14} "
+                f"{sym} {r['overall_status']:<10} {max_wind:>5.1f} kn   {max_wave:>5.1f} m")
+        if args.ml and "ml_max_cancel_probability" in r:
+            line += f"  {r['ml_max_cancel_probability']:>5.0%}"
+        print(line)
 
     print()
     ban_count = sum(1 for r in results if r["overall_status"] == "BAN_LIKELY")
@@ -218,9 +250,44 @@ def check_all_routes(args):
           f"[OK] Clear: {clear_count}")
     print()
 
+    # Send Telegram notification if --notify
+    if args.notify:
+        send_notifications(results)
 
-def train_ml():
-    """Train ML models on synthetic data."""
+    return results
+
+
+def send_notifications(results):
+    """Send Telegram notification with route check results."""
+    from src.services.notifications import TelegramNotifier
+
+    notifier = TelegramNotifier()
+    if not notifier.is_configured:
+        print("  Telegram not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID.")
+        return
+
+    # Add required fields for the notifier
+    formatted = []
+    for r in results:
+        max_wind = max((h["wind_speed_knots"] for h in r["hourly"]), default=0)
+        max_wave = max((h["wave_height_m"] for h in r["hourly"]), default=0)
+        max_bf = knots_to_beaufort(max_wind)
+        formatted.append({
+            **r,
+            "hourly": [
+                {"wind_speed_knots": max_wind, "wave_height_m": max_wave, "beaufort": max_bf},
+            ],
+        })
+
+    sent = notifier.send_alert_if_needed(formatted)
+    if sent:
+        print("  Telegram alert sent!")
+    else:
+        print("  No alerts to send (all routes clear).")
+
+
+def train_ml(from_ground_truth: bool = False):
+    """Train ML models."""
     try:
         from src.models.ml_predictor import MLPredictor
     except ImportError:
@@ -228,9 +295,15 @@ def train_ml():
         return
 
     predictor = MLPredictor()
-    print("Training ML models on synthetic data (5000 samples)...")
-    print()
-    metrics = predictor.train(n_samples=5000)
+
+    if from_ground_truth:
+        print("Training ML models from ground truth data...")
+        print()
+        metrics = predictor.train_from_ground_truth()
+    else:
+        print("Training ML models on synthetic data (5000 samples)...")
+        print()
+        metrics = predictor.train(n_samples=5000)
 
     if metrics:
         print()
@@ -241,7 +314,51 @@ def train_ml():
 
         predictor.save()
         print()
-        print("Models saved to src/models/saved/")
+        print("  Models saved to src/models/saved/")
+    else:
+        print("  Training failed. Check logs for details.")
+
+
+def calibrate():
+    """Analyze ground truth data and suggest threshold calibrations."""
+    from src.models.ml_predictor import calibrate_thresholds
+
+    print("Calibrating thresholds from ground truth data...")
+    print()
+
+    result = calibrate_thresholds()
+    if "error" in result:
+        print(f"  Error: {result['error']}")
+        return
+
+    print(f"  Total records analyzed: {result['total_records']}")
+    print()
+
+    print("  Current thresholds:")
+    for cat, bf in result["current_thresholds"].items():
+        print(f"    {cat}: Beaufort {bf}")
+    print()
+
+    print("  Cancel rates by Beaufort level:")
+    for category, levels in result["cancel_rates_by_beaufort"].items():
+        print(f"  --- {category} ---")
+        for level in levels:
+            bar = "#" * int(level["cancel_rate"] * 30)
+            marker = " <-- threshold" if level["beaufort"] == result["current_thresholds"].get(category) else ""
+            print(f"    Bf {level['beaufort']:>2}: {level['cancel_rate']:>5.1%} "
+                  f"({level['cancelled']:>3}/{level['total']:>3}) {bar}{marker}")
+        print()
+
+    if result["suggested_thresholds"]:
+        print("  Suggested thresholds (>50% cancel rate):")
+        for cat, bf in result["suggested_thresholds"].items():
+            current = result["current_thresholds"].get(cat, "?")
+            delta = ""
+            if isinstance(current, int) and bf != current:
+                delta = f" (currently {current}, delta {bf - current:+d})"
+            print(f"    {cat}: Beaufort {bf}{delta}")
+    else:
+        print("  Not enough data to suggest threshold changes.")
 
 
 def generate_data():
@@ -300,9 +417,13 @@ def main():
         help="Demo scenario (default: auto)",
     )
     parser.add_argument("--live", action="store_true", help="Use live API (requires internet)")
+    parser.add_argument("--ml", action="store_true", help="Enable ML predictions alongside rules")
+    parser.add_argument("--notify", action="store_true", help="Send Telegram alert if risks found")
     parser.add_argument("--test-api", action="store_true", help="Test API connectivity and exit")
-    parser.add_argument("--train-ml", action="store_true", help="Train ML models")
+    parser.add_argument("--train-ml", action="store_true", help="Train ML models (synthetic data)")
+    parser.add_argument("--train-ml-gt", action="store_true", help="Train ML from ground truth CSV")
     parser.add_argument("--generate-data", action="store_true", help="Generate sample ground truth data")
+    parser.add_argument("--calibrate", action="store_true", help="Calibrate thresholds from ground truth")
     parser.add_argument("--web", action="store_true", help="Launch web dashboard")
 
     args = parser.parse_args()
@@ -312,11 +433,19 @@ def main():
         sys.exit(0 if success else 1)
 
     if args.train_ml:
-        train_ml()
+        train_ml(from_ground_truth=False)
+        return
+
+    if args.train_ml_gt:
+        train_ml(from_ground_truth=True)
         return
 
     if args.generate_data:
         generate_data()
+        return
+
+    if args.calibrate:
+        calibrate()
         return
 
     if args.web:
@@ -324,7 +453,9 @@ def main():
         return
 
     if args.route:
-        check_single_route(args.route, args)
+        result = check_single_route(args.route, args)
+        if args.notify and result:
+            send_notifications([result])
     else:
         check_all_routes(args)
 

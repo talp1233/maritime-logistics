@@ -28,6 +28,14 @@ app = FastAPI(
 )
 
 checker = SailingBanChecker()
+ml_checker = None
+
+def _get_ml_checker():
+    """Lazily initialize ML checker."""
+    global ml_checker
+    if ml_checker is None:
+        ml_checker = SailingBanChecker(use_ml=True)
+    return ml_checker
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -126,6 +134,60 @@ def list_scenarios():
 def list_ports():
     """List all ports with coordinates."""
     return PORTS
+
+
+@app.get("/api/check-ml")
+def check_routes_ml(
+    vessel: str = Query("CONVENTIONAL"),
+    scenario: str = Query("auto"),
+    days: int = Query(2, ge=1, le=7),
+):
+    """Check all routes with ML predictions (requires trained models)."""
+    c = _get_ml_checker()
+    results = []
+    for route_id in ROUTES:
+        weather_data = generate_demo_route_conditions(forecast_days=days, scenario=scenario)
+        result = c.check_route(route_id, weather_data, vessel)
+
+        hourly = result.get("hourly", [])
+        result["max_wind"] = max((h["wind_speed_knots"] for h in hourly), default=0)
+        result["max_wave"] = max((h["wave_height_m"] for h in hourly), default=0)
+        result["max_beaufort"] = knots_to_beaufort(result["max_wind"])
+        result["hourly_count"] = len(hourly)
+        del result["hourly"]
+        results.append(result)
+
+    status_order = {"BAN_LIKELY": 0, "AT_RISK": 1, "CLEAR": 2}
+    results.sort(key=lambda r: status_order.get(r["overall_status"], 3))
+
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "vessel_type": vessel,
+        "scenario": scenario,
+        "ml_enabled": c.ml_predictor is not None,
+        "routes": results,
+    }
+
+
+@app.get("/api/calibrate")
+def calibrate_thresholds_endpoint():
+    """Analyze ground truth data and suggest threshold calibrations."""
+    try:
+        from src.models.ml_predictor import calibrate_thresholds
+        return calibrate_thresholds()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/ground-truth/stats")
+def ground_truth_stats():
+    """Get ground truth data statistics."""
+    try:
+        from src.data_collection.ground_truth import GroundTruthCollector
+        collector = GroundTruthCollector()
+        return collector.get_stats()
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
 
 # ---------------------------------------------------------------------------

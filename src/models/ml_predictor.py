@@ -257,3 +257,123 @@ class MLPredictor:
 
         self._trained = True
         logger.info("Models loaded from %s", d)
+
+    def train_from_ground_truth(self, csv_path: str | Path | None = None):
+        """
+        Train models from ground truth CSV data.
+
+        Reads the cancellation_records.csv and converts each record to
+        a feature vector + label for training.
+        """
+        from src.data_collection.ground_truth import GroundTruthCollector
+
+        collector = GroundTruthCollector()
+        if csv_path:
+            collector.records_file = Path(csv_path)
+
+        records = collector.load_records()
+        if len(records) < 50:
+            logger.warning("Only %d records — need at least 50 for training", len(records))
+            return None
+
+        X = []
+        y = []
+        for r in records:
+            wind = r["wind_speed_kn"]
+            wave = r["wave_height_m"]
+            vessel_type = r.get("vessel_type", "CONVENTIONAL")
+            direction = r.get("wind_direction", 0)
+
+            # Parse date for temporal features
+            date_str = r.get("date", "2025-06-15")
+            try:
+                from datetime import datetime
+                dt = datetime.strptime(date_str, "%Y-%m-%d")
+                month = dt.month
+            except (ValueError, TypeError):
+                month = 6
+
+            dep = r.get("scheduled_departure", "12:00")
+            try:
+                hour = int(dep.split(":")[0])
+            except (ValueError, IndexError):
+                hour = 12
+
+            features = extract_features(
+                wind_speed_knots=wind,
+                wave_height_m=wave,
+                wave_period_s=0.0,
+                wind_gust_knots=wind * 1.3,
+                visibility_m=50000.0,
+                swell_height_m=wave * 0.3,
+                vessel_type=vessel_type,
+                exposed_route=True,
+                hour_of_day=hour,
+                month=month,
+            )
+            X.append(features)
+            y.append(1 if r["status"] == "CANCELLED" else 0)
+
+        logger.info("Training from %d ground truth records...", len(records))
+        return self.train(X=X, y=y)
+
+
+def calibrate_thresholds(csv_path: str | Path | None = None) -> dict:
+    """
+    Analyze ground truth data to find actual cancellation patterns
+    and suggest threshold calibrations.
+
+    Returns statistics on cancellation rates by Beaufort level and vessel type.
+    """
+    from src.data_collection.ground_truth import GroundTruthCollector
+
+    collector = GroundTruthCollector()
+    if csv_path:
+        collector.records_file = Path(csv_path)
+
+    records = collector.load_records()
+    if not records:
+        return {"error": "No ground truth data available"}
+
+    # Analyze by Beaufort level
+    bf_stats = {}
+    for r in records:
+        bf = r["wind_beaufort"]
+        vessel = r.get("vessel_type", "CONVENTIONAL")
+        category = VESSEL_TYPES.get(vessel, "conventional")
+        key = (bf, category)
+
+        if key not in bf_stats:
+            bf_stats[key] = {"total": 0, "cancelled": 0}
+        bf_stats[key]["total"] += 1
+        if r["status"] == "CANCELLED":
+            bf_stats[key]["cancelled"] += 1
+
+    # Build cancel rate table
+    results = {}
+    for (bf, category), stats in sorted(bf_stats.items()):
+        rate = stats["cancelled"] / stats["total"] if stats["total"] > 0 else 0
+        cat_results = results.setdefault(category, [])
+        cat_results.append({
+            "beaufort": bf,
+            "total": stats["total"],
+            "cancelled": stats["cancelled"],
+            "cancel_rate": round(rate, 3),
+        })
+
+    # Find actual threshold (first Beaufort where cancel rate > 50%)
+    suggested_thresholds = {}
+    for category, levels in results.items():
+        for level in levels:
+            if level["cancel_rate"] > 0.5 and level["total"] >= 5:
+                suggested_thresholds[category] = level["beaufort"]
+                break
+
+    current_thresholds = SAILING_BAN_THRESHOLDS.copy()
+
+    return {
+        "cancel_rates_by_beaufort": results,
+        "current_thresholds": current_thresholds,
+        "suggested_thresholds": suggested_thresholds,
+        "total_records": len(records),
+    }
