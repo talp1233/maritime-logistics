@@ -583,6 +583,74 @@ def run_fleet_allocation(args):
     print()
 
 
+def build_temporal_cmd(live: bool = False):
+    """Build 5-day temporal dataset."""
+    if live:
+        from src.data_collection.temporal_dataset import build_temporal_dataset_from_archive
+        print("Building temporal dataset from Open-Meteo Archive (requires internet)...")
+        print("This fetches 5-day weather windows for each ground truth event.")
+        print()
+        stats = build_temporal_dataset_from_archive()
+    else:
+        from src.data_collection.temporal_dataset import build_temporal_dataset_synthetic
+        print("Building synthetic temporal dataset from ground truth...")
+        print("(Uses meteorological heuristics to simulate 5-day buildup patterns)")
+        print()
+        stats = build_temporal_dataset_synthetic()
+
+    if "error" in stats:
+        print(f"  Error: {stats['error']}")
+        return
+
+    print(f"  Records:     {stats['total_records']}")
+    print(f"  Cancelled:   {stats['cancelled']}")
+    print(f"  Cancel rate: {stats['cancel_rate']:.1%}")
+    print(f"  Saved to:    {stats['csv_path']}")
+    print()
+    print("Next: python main.py --train-temporal")
+
+
+def train_temporal_cmd():
+    """Train temporal prediction models."""
+    from src.models.temporal_predictor import TemporalPredictor
+    from src.data_collection.temporal_dataset import load_temporal_dataset
+
+    print("Training temporal prediction models (D-5, D-3, D-1, D-0)...")
+    print()
+
+    try:
+        X, y = load_temporal_dataset()
+    except FileNotFoundError as e:
+        print(f"  Error: {e}")
+        print("  Run --build-temporal first.")
+        return
+
+    predictor = TemporalPredictor()
+    results = predictor.train(X, y)
+
+    if results:
+        print()
+        print(f"  {'Lead Time':<20} {'Accuracy':>10}")
+        print("  " + "-" * 32)
+        for lead, info in results.items():
+            print(f"  {info['label']:<20} {info['accuracy']:>9.1%}")
+        print()
+        predictor.save()
+        print("  Models saved to src/models/saved/temporal_models.pkl")
+    else:
+        print("  Training failed.")
+
+
+def backtest_temporal_cmd():
+    """Run temporal backtest — the main accuracy report."""
+    from src.models.temporal_predictor import backtest_temporal, print_temporal_report
+
+    print("Running temporal prediction backtest...")
+    print()
+    report = backtest_temporal()
+    print_temporal_report(report)
+
+
 def run_backtest_cmd():
     """Run validation backtest from CLI."""
     from src.validation.backtester import run_backtest, print_backtest_report
@@ -644,6 +712,16 @@ def main():
     parser.add_argument("--backtest", action="store_true", help="Validate risk scorer against ground truth")
     parser.add_argument("--vessel-name", type=str, default=None, help="Specific vessel name (e.g. 'Blue Star Delos')")
 
+    # Temporal prediction (5-day window)
+    parser.add_argument("--build-temporal", action="store_true",
+                        help="Build 5-day temporal dataset from ground truth")
+    parser.add_argument("--build-temporal-live", action="store_true",
+                        help="Build temporal dataset using real Open-Meteo archive data (requires internet)")
+    parser.add_argument("--train-temporal", action="store_true",
+                        help="Train temporal prediction models (D-5, D-3, D-1, D-0)")
+    parser.add_argument("--backtest-temporal", action="store_true",
+                        help="Backtest temporal predictions and show accuracy at each lead time")
+
     args = parser.parse_args()
 
     if args.test_api:
@@ -676,6 +754,22 @@ def main():
 
     if args.web:
         launch_web()
+        return
+
+    if args.build_temporal:
+        build_temporal_cmd(live=False)
+        return
+
+    if args.build_temporal_live:
+        build_temporal_cmd(live=True)
+        return
+
+    if args.train_temporal:
+        train_temporal_cmd()
+        return
+
+    if args.backtest_temporal:
+        backtest_temporal_cmd()
         return
 
     if args.backtest:

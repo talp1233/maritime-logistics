@@ -379,6 +379,18 @@ def backtest_endpoint():
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+@app.get("/api/backtest-temporal")
+def backtest_temporal_endpoint():
+    """Backtest temporal predictions — accuracy at each lead time."""
+    from src.models.temporal_predictor import backtest_temporal
+    try:
+        return backtest_temporal()
+    except FileNotFoundError as e:
+        return JSONResponse(status_code=404, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 # ---------------------------------------------------------------------------
 # Embedded HTML dashboard with Leaflet.js map
 # ---------------------------------------------------------------------------
