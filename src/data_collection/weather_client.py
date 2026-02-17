@@ -126,7 +126,12 @@ def fetch_route_conditions(
 
 
 def _fetch_json(url: str, timeout: int = 30) -> dict:
-    """Fetch a URL and return parsed JSON. Raises on HTTP/network errors."""
+    """Fetch a URL and return parsed JSON. Respects rate limits."""
+    from src.utils.rate_limiter import api_rate_limiter
+
+    if not api_rate_limiter.acquire(timeout=10):
+        raise RuntimeError("API rate limit exceeded — try again later")
+
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))

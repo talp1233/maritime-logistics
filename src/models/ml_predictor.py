@@ -318,6 +318,30 @@ class MLPredictor:
         return self.train(X=X, y=y)
 
 
+    def train_from_historical(self, csv_path: str | Path | None = None):
+        """
+        Train models from real historical weather data.
+
+        Uses the dataset built by `historical_weather.build_historical_dataset()`
+        which contains actual Open-Meteo weather observations paired with
+        rule-derived sailing statuses.
+        """
+        from src.data_collection.historical_weather import load_historical_dataset
+
+        try:
+            X, y = load_historical_dataset(csv_path)
+        except FileNotFoundError as e:
+            logger.error(str(e))
+            return None
+
+        if len(X) < 100:
+            logger.warning("Only %d records — need at least 100 for training", len(X))
+            return None
+
+        logger.info("Training from %d historical weather records...", len(X))
+        return self.train(X=X, y=y)
+
+
 def calibrate_thresholds(csv_path: str | Path | None = None) -> dict:
     """
     Analyze ground truth data to find actual cancellation patterns

@@ -17,8 +17,9 @@ except ImportError:
         "Install with: pip install fastapi uvicorn"
     )
 
-from src.config.constants import ROUTES, PORTS, VESSEL_TYPES, BEAUFORT_SCALE, knots_to_beaufort
+from src.config.constants import ROUTES, PORTS, VESSEL_TYPES, BEAUFORT_SCALE, VESSELS, knots_to_beaufort
 from src.services.sailing_ban_checker import SailingBanChecker
+from src.services.route_analysis import analyze_route_risk, get_route_sample_points
 from src.data_collection.demo_data import generate_demo_route_conditions, DEMO_SCENARIOS
 
 app = FastAPI(
@@ -190,6 +191,206 @@ def ground_truth_stats():
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint — verifies all components."""
+    status = {"status": "ok", "timestamp": datetime.now().isoformat()}
+
+    # Check ML models
+    try:
+        c = _get_ml_checker()
+        status["ml_available"] = c.ml_predictor is not None
+    except Exception:
+        status["ml_available"] = False
+
+    # Check ground truth data
+    try:
+        from src.data_collection.ground_truth import GroundTruthCollector
+        collector = GroundTruthCollector()
+        stats = collector.get_stats()
+        status["ground_truth_records"] = stats.get("total", 0)
+    except Exception:
+        status["ground_truth_records"] = 0
+
+    # Check cache
+    from src.utils.cache import api_cache
+    status["cache_size"] = api_cache.size
+
+    # Check rate limiter
+    from src.utils.rate_limiter import api_rate_limiter
+    status["rate_limit_remaining"] = api_rate_limiter.remaining
+
+    status["routes_configured"] = len(ROUTES)
+    status["ports_configured"] = len(PORTS)
+    status["vessels_configured"] = len(VESSELS)
+
+    return status
+
+
+@app.get("/api/route-analysis/{route_id}")
+def route_analysis(
+    route_id: str,
+    wind_speed: float = Query(20.0, description="Wind speed in knots"),
+    wind_direction: float = Query(0.0, description="Wind direction (0=N, 90=E)"),
+    wave_height: float = Query(2.0, description="Wave height in meters"),
+    vessel: str = Query("CONVENTIONAL"),
+):
+    """Detailed route risk analysis with wind angle, shelter, and waypoints."""
+    if route_id not in ROUTES:
+        return JSONResponse(
+            status_code=404,
+            content={"error": f"Unknown route: {route_id}"},
+        )
+    return analyze_route_risk(route_id, wind_speed, wind_direction, wave_height, vessel)
+
+
+@app.get("/api/vessels")
+def list_vessels():
+    """List all known vessels with their specific thresholds."""
+    return VESSELS
+
+
+@app.get("/api/route-points/{route_id}")
+def route_points(
+    route_id: str,
+    interval_nm: float = Query(20.0, ge=5, le=100),
+):
+    """Get sample points along a route for multi-point weather checking."""
+    if route_id not in ROUTES:
+        return JSONResponse(status_code=404, content={"error": f"Unknown route: {route_id}"})
+    return get_route_sample_points(route_id, interval_nm=interval_nm)
+
+
+# ---------------------------------------------------------------------------
+# Risk Scoring Engine endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/risk-score")
+def risk_score_endpoint(
+    route_id: str = Query("PIR-MYK"),
+    wind_speed: float = Query(20.0, description="Wind speed in knots"),
+    wave_height: float = Query(2.0, description="Significant wave height (m)"),
+    wave_period: float = Query(5.0, description="Dominant wave period (s)"),
+    wind_direction: float = Query(0.0, description="Wind direction 0=N"),
+    wind_gust: float = Query(None, description="Gust speed (knots)"),
+    swell_height: float = Query(0.0, description="Swell height (m)"),
+    vessel: str = Query("CONVENTIONAL"),
+    vessel_name: str = Query(None, description="Specific vessel name"),
+):
+    """Compute probabilistic risk score for a single condition set."""
+    from src.services.risk_scorer import compute_risk
+    if route_id not in ROUTES:
+        return JSONResponse(status_code=404, content={"error": f"Unknown route: {route_id}"})
+    result = compute_risk(
+        wind_speed_knots=wind_speed,
+        wave_height_m=wave_height,
+        wave_period_s=wave_period,
+        wind_gust_knots=wind_gust,
+        swell_height_m=swell_height,
+        wind_direction=wind_direction,
+        vessel_type=vessel,
+        vessel_name=vessel_name,
+        route_id=route_id,
+    )
+    return result.to_dict()
+
+
+@app.get("/api/risk-score/{route_id}")
+def risk_score_route(
+    route_id: str,
+    vessel: str = Query("CONVENTIONAL"),
+    vessel_name: str = Query(None),
+    scenario: str = Query("auto"),
+    days: int = Query(2, ge=1, le=7),
+):
+    """Compute hourly risk scores for a full route forecast."""
+    from src.services.risk_scorer import score_route
+    if route_id not in ROUTES:
+        return JSONResponse(status_code=404, content={"error": f"Unknown route: {route_id}"})
+    weather_data = generate_demo_route_conditions(forecast_days=days, scenario=scenario)
+    return score_route(route_id, weather_data, vessel, vessel_name)
+
+
+@app.get("/api/optimize-departure/{route_id}")
+def optimize_departure(
+    route_id: str,
+    departure_hour: int = Query(7, ge=0, le=23, description="Scheduled departure hour"),
+    vessel: str = Query("CONVENTIONAL"),
+    vessel_name: str = Query(None),
+    scenario: str = Query("auto"),
+    days: int = Query(1, ge=1, le=3),
+):
+    """Find the safest departure window near the scheduled time."""
+    from src.services.risk_scorer import score_route
+    from src.services.departure_optimizer import find_optimal_departure
+    if route_id not in ROUTES:
+        return JSONResponse(status_code=404, content={"error": f"Unknown route: {route_id}"})
+    weather_data = generate_demo_route_conditions(forecast_days=days, scenario=scenario)
+    scored = score_route(route_id, weather_data, vessel, vessel_name)
+    # Find the hourly index matching the departure hour
+    target_idx = None
+    for i, h in enumerate(scored["hourly"]):
+        try:
+            if int(h["time"][11:13]) == departure_hour:
+                target_idx = i
+                break
+        except (ValueError, IndexError):
+            continue
+    if target_idx is None:
+        return JSONResponse(status_code=400, content={"error": f"No data for hour {departure_hour}"})
+    result = find_optimal_departure(scored["hourly"], target_idx)
+    return result.to_dict()
+
+
+@app.get("/api/fleet-allocation")
+def fleet_allocation(
+    wind_speed: float = Query(25.0),
+    wave_height: float = Query(2.5),
+    wave_period: float = Query(5.0),
+    wind_direction: float = Query(0.0),
+    swell_height: float = Query(0.0),
+):
+    """Recommend optimal vessel-to-route assignments under current conditions."""
+    from src.services.fleet_allocator import allocate_fleet
+    routes = list(ROUTES.keys())
+    conditions = {
+        r: {
+            "wind_speed_knots": wind_speed,
+            "wave_height_m": wave_height,
+            "wave_period_s": wave_period,
+            "wind_direction": wind_direction,
+            "swell_height_m": swell_height,
+        }
+        for r in routes
+    }
+    result = allocate_fleet(routes, conditions)
+    return result.to_dict()
+
+
+@app.get("/api/backtest")
+def backtest_endpoint():
+    """Run validation backtest against ground truth data."""
+    from src.validation.backtester import run_backtest
+    try:
+        return run_backtest()
+    except FileNotFoundError as e:
+        return JSONResponse(status_code=404, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+@app.get("/api/backtest-temporal")
+def backtest_temporal_endpoint():
+    """Backtest temporal predictions — accuracy at each lead time."""
+    from src.models.temporal_predictor import backtest_temporal
+    try:
+        return backtest_temporal()
+    except FileNotFoundError as e:
+        return JSONResponse(status_code=404, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
 # ---------------------------------------------------------------------------
 # Embedded HTML dashboard with Leaflet.js map
 # ---------------------------------------------------------------------------
@@ -201,39 +402,52 @@ MAP_HTML = """<!DOCTYPE html>
 <title>Maritime Intelligence Platform</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
          background: #0a1628; color: #e0e0e0; }
   #header { background: #1a2a4a; padding: 12px 24px; display: flex;
-            justify-content: space-between; align-items: center; }
+            justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
   #header h1 { font-size: 18px; color: #4fc3f7; }
-  #controls { display: flex; gap: 12px; align-items: center; }
+  #controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   select, button { padding: 6px 12px; border-radius: 4px; border: 1px solid #345;
                    background: #1e3050; color: #e0e0e0; font-size: 13px; cursor: pointer; }
   button { background: #2196F3; border: none; font-weight: bold; }
   button:hover { background: #1976D2; }
-  #map { height: calc(100vh - 200px); }
-  #summary { background: #0d1f3c; padding: 12px 24px; display: flex;
-             gap: 24px; align-items: center; font-size: 14px; }
-  .stat { display: flex; align-items: center; gap: 6px; }
-  .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+  .btn-sm { padding: 4px 8px; font-size: 11px; background: #37474f; }
+  .btn-sm.active { background: #2196F3; }
+  #main { display: flex; flex-direction: column; height: calc(100vh - 52px); }
+  #map { flex: 1; min-height: 300px; }
+  #bottom { display: flex; background: #0d1f3c; max-height: 45vh; overflow: hidden; }
+  #table-panel { flex: 1; overflow-y: auto; }
+  #chart-panel { width: 400px; padding: 12px; display: none; }
+  #chart-panel.visible { display: block; }
+  #summary { background: #0d1f3c; padding: 8px 24px; display: flex;
+             gap: 16px; align-items: center; font-size: 13px; flex-wrap: wrap; }
+  .stat { display: flex; align-items: center; gap: 4px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
   .dot-red { background: #f44336; }
   .dot-yellow { background: #ff9800; }
   .dot-green { background: #4caf50; }
-  #table-wrap { max-height: 160px; overflow-y: auto; background: #0d1f3c; }
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { background: #1a2a4a; position: sticky; top: 0; padding: 6px 12px;
-       text-align: left; color: #90caf9; }
-  td { padding: 5px 12px; border-bottom: 1px solid #1a2a4a; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { background: #1a2a4a; position: sticky; top: 0; padding: 5px 10px;
+       text-align: left; color: #90caf9; font-size: 11px; }
+  td { padding: 4px 10px; border-bottom: 1px solid #1a2a4a; cursor: pointer; }
+  tr:hover td { background: #1a2a4a; }
   .status-BAN_LIKELY { color: #f44336; font-weight: bold; }
   .status-AT_RISK { color: #ff9800; font-weight: bold; }
   .status-CLEAR { color: #4caf50; }
+  #timer { font-size: 11px; color: #78909c; }
+  @media (max-width: 768px) {
+    #bottom { flex-direction: column; }
+    #chart-panel { width: 100%; max-height: 200px; }
+  }
 </style>
 </head>
 <body>
 <div id="header">
-  <h1>Greek Maritime Intelligence Platform</h1>
+  <h1>Greek Maritime Intelligence</h1>
   <div id="controls">
     <select id="vessel">
       <option value="CONVENTIONAL">Conventional</option>
@@ -243,19 +457,26 @@ MAP_HTML = """<!DOCTYPE html>
     </select>
     <select id="scenario">
       <option value="auto">Auto (seasonal)</option>
-      <option value="calm">Calm</option>
+      <option value="calm_summer">Calm</option>
       <option value="storm">Storm</option>
       <option value="meltemi">Meltemi</option>
     </select>
     <button onclick="refresh()">Refresh</button>
+    <button class="btn-sm" id="autoBtn" onclick="toggleAutoRefresh()">Auto: OFF</button>
+    <span id="timer"></span>
   </div>
 </div>
-<div id="map"></div>
-<div id="summary"></div>
-<div id="table-wrap"><table><thead><tr>
-  <th>Route</th><th>From</th><th>To</th><th>Status</th>
-  <th>Max Wind</th><th>Max Wave</th><th>Beaufort</th>
-</tr></thead><tbody id="tbody"></tbody></table></div>
+<div id="main">
+  <div id="map"></div>
+  <div id="summary"></div>
+  <div id="bottom">
+    <div id="table-panel"><table><thead><tr>
+      <th>Route</th><th>From</th><th>To</th><th>Status</th>
+      <th>Wind</th><th>Wave</th><th>Bf</th>
+    </tr></thead><tbody id="tbody"></tbody></table></div>
+    <div id="chart-panel"><canvas id="routeChart"></canvas></div>
+  </div>
+</div>
 
 <script>
 const map = L.map('map').setView([37.5, 25.0], 7);
@@ -263,36 +484,112 @@ L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   attribution: 'CartoDB', maxZoom: 18
 }).addTo(map);
 
-let routeLines = [];
-let portMarkers = [];
-
+let routeLines = [], portMarkers = [], wpMarkers = [];
+let autoInterval = null, routeChart = null, lastData = null;
 const colors = { BAN_LIKELY: '#f44336', AT_RISK: '#ff9800', CLEAR: '#4caf50' };
+
+function toggleAutoRefresh() {
+  const btn = document.getElementById('autoBtn');
+  if (autoInterval) {
+    clearInterval(autoInterval);
+    autoInterval = null;
+    btn.textContent = 'Auto: OFF';
+    btn.classList.remove('active');
+    document.getElementById('timer').textContent = '';
+  } else {
+    autoInterval = setInterval(refresh, 60000);
+    btn.textContent = 'Auto: 1m';
+    btn.classList.add('active');
+  }
+}
+
+async function showRouteDetail(routeId) {
+  const vessel = document.getElementById('vessel').value;
+  const scenario = document.getElementById('scenario').value;
+  const resp = await fetch('/api/check/' + routeId + '?vessel=' + vessel + '&scenario=' + scenario);
+  const data = await resp.json();
+
+  // Show waypoints on map
+  wpMarkers.forEach(m => map.removeLayer(m));
+  wpMarkers = [];
+  try {
+    const pts = await (await fetch('/api/route-points/' + routeId)).json();
+    pts.forEach((p, i) => {
+      if (i > 0 && i < pts.length - 1) {
+        const m = L.circleMarker([p.lat, p.lon], {
+          radius: 3, fillColor: '#fff', fillOpacity: 0.5, color: '#fff', weight: 1
+        }).addTo(map).bindTooltip(p.name);
+        wpMarkers.push(m);
+      }
+    });
+  } catch(e) {}
+
+  // Build chart
+  const panel = document.getElementById('chart-panel');
+  panel.classList.add('visible');
+
+  const hourly = data.hourly || [];
+  const labels = hourly.map(h => h.time ? h.time.substring(11, 16) : '');
+  const winds = hourly.map(h => h.wind_speed_knots);
+  const waves = hourly.map(h => h.wave_height_m);
+
+  if (routeChart) routeChart.destroy();
+  routeChart = new Chart(document.getElementById('routeChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Wind (kn)', data: winds, borderColor: '#4fc3f7', backgroundColor: 'rgba(79,195,247,0.1)',
+          fill: true, tension: 0.3, yAxisID: 'y' },
+        { label: 'Wave (m)', data: waves, borderColor: '#ff9800', backgroundColor: 'rgba(255,152,0,0.1)',
+          fill: true, tension: 0.3, yAxisID: 'y1' }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { title: { display: true, text: data.route_name || routeId, color: '#e0e0e0' },
+                 legend: { labels: { color: '#aaa', font: { size: 10 } } } },
+      scales: {
+        x: { ticks: { color: '#888', maxTicksLimit: 12, font: { size: 9 } }, grid: { color: '#1a2a4a' } },
+        y: { position: 'left', title: { display: true, text: 'Wind (kn)', color: '#4fc3f7' },
+             ticks: { color: '#4fc3f7' }, grid: { color: '#1a2a4a' } },
+        y1: { position: 'right', title: { display: true, text: 'Wave (m)', color: '#ff9800' },
+              ticks: { color: '#ff9800' }, grid: { drawOnChartArea: false } }
+      }
+    }
+  });
+}
 
 async function refresh() {
   const vessel = document.getElementById('vessel').value;
   const scenario = document.getElementById('scenario').value;
-  const resp = await fetch('/api/check?vessel=' + vessel + '&scenario=' + scenario);
+  document.getElementById('timer').textContent = 'loading...';
+
+  const [resp, routeResp] = await Promise.all([
+    fetch('/api/check?vessel=' + vessel + '&scenario=' + scenario),
+    fetch('/api/routes')
+  ]);
   const data = await resp.json();
-  const ports = await (await fetch('/api/ports')).json();
-  const routeDefs = await (await fetch('/api/routes')).json();
+  const routeDefs = await routeResp.json();
+  lastData = data;
 
   routeLines.forEach(l => map.removeLayer(l));
   portMarkers.forEach(m => map.removeLayer(m));
-  routeLines = [];
-  portMarkers = [];
+  wpMarkers.forEach(m => map.removeLayer(m));
+  routeLines = []; portMarkers = []; wpMarkers = [];
 
   const s = data.summary;
   document.getElementById('summary').innerHTML =
-    '<span><b>' + data.routes.length + ' routes</b> checked | ' +
-    data.scenario + ' scenario | ' + data.vessel_type + '</span>' +
-    '<span class="stat"><span class="dot dot-red"></span> Ban: ' + s.ban_likely + '</span>' +
-    '<span class="stat"><span class="dot dot-yellow"></span> Risk: ' + s.at_risk + '</span>' +
-    '<span class="stat"><span class="dot dot-green"></span> Clear: ' + s.clear + '</span>';
+    '<span><b>' + data.routes.length + '</b> routes | ' + data.scenario + ' | ' + data.vessel_type + '</span>' +
+    '<span class="stat"><span class="dot dot-red"></span>' + s.ban_likely + '</span>' +
+    '<span class="stat"><span class="dot dot-yellow"></span>' + s.at_risk + '</span>' +
+    '<span class="stat"><span class="dot dot-green"></span>' + s.clear + '</span>' +
+    '<span style="margin-left:auto;font-size:11px;color:#607d8b">' + new Date().toLocaleTimeString() + '</span>';
 
   const tbody = document.getElementById('tbody');
   tbody.innerHTML = '';
-
   const drawnPorts = {};
+
   data.routes.forEach(r => {
     const rd = routeDefs.find(d => d.id === r.route_id);
     if (!rd || !rd.origin.lat) return;
@@ -301,11 +598,14 @@ async function refresh() {
     const line = L.polyline(
       [[rd.origin.lat, rd.origin.lon], [rd.destination.lat, rd.destination.lon]],
       { color, weight: 3, opacity: 0.8 }
-    ).addTo(map).bindPopup(
-      '<b>' + r.route_name + '</b><br>Status: ' + r.overall_status +
+    ).addTo(map);
+    line.bindPopup(
+      '<b>' + r.route_name + '</b><br>Status: <b style="color:' + color + '">' + r.overall_status + '</b>' +
       '<br>Wind: ' + r.max_wind.toFixed(0) + ' kn (Bf ' + r.max_beaufort + ')' +
-      '<br>Wave: ' + r.max_wave.toFixed(1) + ' m'
+      '<br>Wave: ' + r.max_wave.toFixed(1) + ' m' +
+      '<br><a href="#" onclick="showRouteDetail(\\''+r.route_id+'\\');return false">View forecast chart</a>'
     );
+    line.on('click', () => showRouteDetail(r.route_id));
     routeLines.push(line);
 
     [[rd.origin.code, rd.origin.lat, rd.origin.lon, rd.origin.origin],
@@ -313,8 +613,7 @@ async function refresh() {
     ].forEach(([code, lat, lon, name]) => {
       if (!drawnPorts[code] && lat) {
         const m = L.circleMarker([lat, lon], {
-          radius: 6, fillColor: '#4fc3f7', fillOpacity: 0.9,
-          color: '#fff', weight: 1
+          radius: 5, fillColor: '#4fc3f7', fillOpacity: 0.9, color: '#fff', weight: 1
         }).addTo(map).bindTooltip(name || code);
         portMarkers.push(m);
         drawnPorts[code] = true;
@@ -322,16 +621,19 @@ async function refresh() {
     });
 
     const tr = document.createElement('tr');
+    tr.onclick = () => showRouteDetail(r.route_id);
     tr.innerHTML =
       '<td>' + r.route_id + '</td>' +
-      '<td>' + r.route_name.split(' → ')[0] + '</td>' +
-      '<td>' + r.route_name.split(' → ')[1] + '</td>' +
+      '<td>' + (r.route_name.split(' \\u2192 ')[0]||'') + '</td>' +
+      '<td>' + (r.route_name.split(' \\u2192 ')[1]||'') + '</td>' +
       '<td class="status-' + r.overall_status + '">' + r.overall_status + '</td>' +
       '<td>' + r.max_wind.toFixed(0) + ' kn</td>' +
       '<td>' + r.max_wave.toFixed(1) + ' m</td>' +
       '<td>' + r.max_beaufort + '</td>';
     tbody.appendChild(tr);
   });
+
+  document.getElementById('timer').textContent = 'updated ' + new Date().toLocaleTimeString();
 }
 
 refresh();
