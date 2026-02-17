@@ -16,6 +16,9 @@ Usage:
     python main.py --train-ml-gt            # Train ML from ground truth CSV
     python main.py --generate-data          # Generate sample ground truth data
     python main.py --calibrate              # Calibrate thresholds from ground truth
+    python main.py --fetch-historical       # Fetch real historical weather from Open-Meteo
+    python main.py --historical-days 730    # Fetch 2 years of history
+    python main.py --train-ml-historical    # Train ML from real historical data
     python main.py --web                    # Launch web dashboard
 """
 
@@ -380,6 +383,59 @@ def generate_data():
     print(f"  Data saved to:   data/ground_truth/cancellation_records.csv")
 
 
+def fetch_historical(days_back: int = 365):
+    """Fetch real historical weather data from Open-Meteo APIs."""
+    from src.data_collection.historical_weather import build_historical_dataset
+
+    print(f"Fetching {days_back} days of historical weather data from Open-Meteo...")
+    print("This will query the Marine API and Archive Weather API for all routes.")
+    print()
+
+    stats = build_historical_dataset(days_back=days_back)
+
+    print()
+    print("=" * 50)
+    print("  HISTORICAL DATA COLLECTION COMPLETE")
+    print("=" * 50)
+    print()
+    print(f"  Records:       {stats['total_records']:,}")
+    print(f"  Cancelled:     {stats['cancelled']:,}")
+    print(f"  Cancel rate:   {stats['cancel_rate']:.1%}")
+    print(f"  Routes:        {stats['routes_fetched']}")
+    print(f"  Date range:    {stats['date_range']['start']} to {stats['date_range']['end']}")
+    print(f"  Saved to:      {stats['csv_path']}")
+    print()
+    print("Next step: train ML models with --train-ml-historical")
+
+
+def train_ml_historical():
+    """Train ML models from real historical weather data."""
+    try:
+        from src.models.ml_predictor import MLPredictor
+    except ImportError:
+        print("scikit-learn required. Install with: pip install scikit-learn")
+        return
+
+    predictor = MLPredictor()
+    print("Training ML models from historical weather data...")
+    print()
+
+    metrics = predictor.train_from_historical()
+
+    if metrics:
+        print()
+        print(f"  Logistic Regression accuracy: {metrics['logistic_regression_accuracy']:.3f}")
+        print(f"  Gradient Boosting accuracy:   {metrics['gradient_boosting_accuracy']:.3f}")
+        print(f"  Train samples: {metrics['train_size']}")
+        print(f"  Test samples:  {metrics['test_size']}")
+
+        predictor.save()
+        print()
+        print("  Models saved to src/models/saved/")
+    else:
+        print("  Training failed. Run --fetch-historical first to collect data.")
+
+
 def launch_web():
     """Launch the web dashboard."""
     try:
@@ -424,6 +480,18 @@ def main():
     parser.add_argument("--train-ml-gt", action="store_true", help="Train ML from ground truth CSV")
     parser.add_argument("--generate-data", action="store_true", help="Generate sample ground truth data")
     parser.add_argument("--calibrate", action="store_true", help="Calibrate thresholds from ground truth")
+    parser.add_argument(
+        "--fetch-historical", action="store_true",
+        help="Fetch real historical weather data from Open-Meteo",
+    )
+    parser.add_argument(
+        "--historical-days", type=int, default=365,
+        help="Days of history to fetch (default: 365)",
+    )
+    parser.add_argument(
+        "--train-ml-historical", action="store_true",
+        help="Train ML from real historical weather data",
+    )
     parser.add_argument("--web", action="store_true", help="Launch web dashboard")
 
     args = parser.parse_args()
@@ -446,6 +514,14 @@ def main():
 
     if args.calibrate:
         calibrate()
+        return
+
+    if args.fetch_historical:
+        fetch_historical(days_back=args.historical_days)
+        return
+
+    if args.train_ml_historical:
+        train_ml_historical()
         return
 
     if args.web:
