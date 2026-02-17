@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+
+  # Scheduled check every 3 hours — sends Telegram alerts
+  scheduler:
+    build: .
+    command: python scripts/scheduled_check.py
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID:-}
+      - CHECK_INTERVAL_HOURS=3
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    depends_on:
+      - web

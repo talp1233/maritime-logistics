@@ -296,3 +296,91 @@ OPERATORS = {
         "key_routes": ["RAF-AND", "RAF-TIN"],
     },
 }
+
+# ---------------------------------------------------------------------------
+# Individual vessel data — specific thresholds per ship
+# ---------------------------------------------------------------------------
+# Some vessels have different capabilities than their class average.
+# bf_threshold overrides the category default if present.
+VESSELS = {
+    "Blue Star Delos": {
+        "operator": "BLUESTAR",
+        "type": "CONVENTIONAL",
+        "gross_tonnage": 28667,
+        "bf_threshold": 9,           # Large, stable vessel
+        "wave_threshold": 6.0,
+        "routes": ["PIR-SYR", "PIR-MYK", "PIR-NAX"],
+    },
+    "Blue Star Naxos": {
+        "operator": "BLUESTAR",
+        "type": "CONVENTIONAL",
+        "gross_tonnage": 28667,
+        "bf_threshold": 9,
+        "wave_threshold": 6.0,
+        "routes": ["PIR-NAX", "PIR-SAN"],
+    },
+    "Blue Star Paros": {
+        "operator": "BLUESTAR",
+        "type": "CONVENTIONAL",
+        "gross_tonnage": 28667,
+        "bf_threshold": 9,
+        "wave_threshold": 6.0,
+        "routes": ["PIR-NAX", "PIR-SAN"],
+    },
+    "Champion Jet 1": {
+        "operator": "SEAJETS",
+        "type": "HIGH_SPEED",
+        "gross_tonnage": 5005,
+        "bf_threshold": 6,
+        "wave_threshold": 2.5,
+        "routes": ["PIR-MYK", "PIR-SAN"],
+    },
+    "WorldChampion Jet": {
+        "operator": "SEAJETS",
+        "type": "HIGH_SPEED",
+        "gross_tonnage": 7080,
+        "bf_threshold": 7,           # Larger HSC, slightly more capable
+        "wave_threshold": 3.0,
+        "routes": ["PIR-MYK", "PIR-SAN", "PIR-NAX"],
+    },
+    "Knossos Palace": {
+        "operator": "MINOAN",
+        "type": "CONVENTIONAL",
+        "gross_tonnage": 36052,
+        "bf_threshold": 10,          # Very large, handles heavy seas
+        "wave_threshold": 7.0,
+        "routes": ["PIR-HER"],
+    },
+    "Festos Palace": {
+        "operator": "MINOAN",
+        "type": "CONVENTIONAL",
+        "gross_tonnage": 36052,
+        "bf_threshold": 10,
+        "wave_threshold": 7.0,
+        "routes": ["PIR-HER"],
+    },
+    "Superferry II": {
+        "operator": "GOLDENSTAR",
+        "type": "CONVENTIONAL",
+        "gross_tonnage": 4986,
+        "bf_threshold": 7,           # Smaller conventional
+        "wave_threshold": 4.0,
+        "routes": ["RAF-MYK", "RAF-AND", "RAF-TIN"],
+    },
+    "Tera Jet": {
+        "operator": "SEAJETS",
+        "type": "HIGH_SPEED",
+        "gross_tonnage": 4708,
+        "bf_threshold": 5,           # Smaller HSC
+        "wave_threshold": 2.0,
+        "routes": ["RAF-MYK", "RAF-TIN"],
+    },
+    "Naxos Jet": {
+        "operator": "SEAJETS",
+        "type": "HIGH_SPEED",
+        "gross_tonnage": 3200,
+        "bf_threshold": 5,
+        "wave_threshold": 2.0,
+        "routes": ["PIR-NAX"],
+    },
+}
