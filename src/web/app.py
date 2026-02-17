@@ -262,6 +262,124 @@ def route_points(
 
 
 # ---------------------------------------------------------------------------
+# Risk Scoring Engine endpoints
+# ---------------------------------------------------------------------------
+
+@app.get("/api/risk-score")
+def risk_score_endpoint(
+    route_id: str = Query("PIR-MYK"),
+    wind_speed: float = Query(20.0, description="Wind speed in knots"),
+    wave_height: float = Query(2.0, description="Significant wave height (m)"),
+    wave_period: float = Query(5.0, description="Dominant wave period (s)"),
+    wind_direction: float = Query(0.0, description="Wind direction 0=N"),
+    wind_gust: float = Query(None, description="Gust speed (knots)"),
+    swell_height: float = Query(0.0, description="Swell height (m)"),
+    vessel: str = Query("CONVENTIONAL"),
+    vessel_name: str = Query(None, description="Specific vessel name"),
+):
+    """Compute probabilistic risk score for a single condition set."""
+    from src.services.risk_scorer import compute_risk
+    if route_id not in ROUTES:
+        return JSONResponse(status_code=404, content={"error": f"Unknown route: {route_id}"})
+    result = compute_risk(
+        wind_speed_knots=wind_speed,
+        wave_height_m=wave_height,
+        wave_period_s=wave_period,
+        wind_gust_knots=wind_gust,
+        swell_height_m=swell_height,
+        wind_direction=wind_direction,
+        vessel_type=vessel,
+        vessel_name=vessel_name,
+        route_id=route_id,
+    )
+    return result.to_dict()
+
+
+@app.get("/api/risk-score/{route_id}")
+def risk_score_route(
+    route_id: str,
+    vessel: str = Query("CONVENTIONAL"),
+    vessel_name: str = Query(None),
+    scenario: str = Query("auto"),
+    days: int = Query(2, ge=1, le=7),
+):
+    """Compute hourly risk scores for a full route forecast."""
+    from src.services.risk_scorer import score_route
+    if route_id not in ROUTES:
+        return JSONResponse(status_code=404, content={"error": f"Unknown route: {route_id}"})
+    weather_data = generate_demo_route_conditions(forecast_days=days, scenario=scenario)
+    return score_route(route_id, weather_data, vessel, vessel_name)
+
+
+@app.get("/api/optimize-departure/{route_id}")
+def optimize_departure(
+    route_id: str,
+    departure_hour: int = Query(7, ge=0, le=23, description="Scheduled departure hour"),
+    vessel: str = Query("CONVENTIONAL"),
+    vessel_name: str = Query(None),
+    scenario: str = Query("auto"),
+    days: int = Query(1, ge=1, le=3),
+):
+    """Find the safest departure window near the scheduled time."""
+    from src.services.risk_scorer import score_route
+    from src.services.departure_optimizer import find_optimal_departure
+    if route_id not in ROUTES:
+        return JSONResponse(status_code=404, content={"error": f"Unknown route: {route_id}"})
+    weather_data = generate_demo_route_conditions(forecast_days=days, scenario=scenario)
+    scored = score_route(route_id, weather_data, vessel, vessel_name)
+    # Find the hourly index matching the departure hour
+    target_idx = None
+    for i, h in enumerate(scored["hourly"]):
+        try:
+            if int(h["time"][11:13]) == departure_hour:
+                target_idx = i
+                break
+        except (ValueError, IndexError):
+            continue
+    if target_idx is None:
+        return JSONResponse(status_code=400, content={"error": f"No data for hour {departure_hour}"})
+    result = find_optimal_departure(scored["hourly"], target_idx)
+    return result.to_dict()
+
+
+@app.get("/api/fleet-allocation")
+def fleet_allocation(
+    wind_speed: float = Query(25.0),
+    wave_height: float = Query(2.5),
+    wave_period: float = Query(5.0),
+    wind_direction: float = Query(0.0),
+    swell_height: float = Query(0.0),
+):
+    """Recommend optimal vessel-to-route assignments under current conditions."""
+    from src.services.fleet_allocator import allocate_fleet
+    routes = list(ROUTES.keys())
+    conditions = {
+        r: {
+            "wind_speed_knots": wind_speed,
+            "wave_height_m": wave_height,
+            "wave_period_s": wave_period,
+            "wind_direction": wind_direction,
+            "swell_height_m": swell_height,
+        }
+        for r in routes
+    }
+    result = allocate_fleet(routes, conditions)
+    return result.to_dict()
+
+
+@app.get("/api/backtest")
+def backtest_endpoint():
+    """Run validation backtest against ground truth data."""
+    from src.validation.backtester import run_backtest
+    try:
+        return run_backtest()
+    except FileNotFoundError as e:
+        return JSONResponse(status_code=404, content={"error": str(e)})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+
+# ---------------------------------------------------------------------------
 # Embedded HTML dashboard with Leaflet.js map
 # ---------------------------------------------------------------------------
 MAP_HTML = """<!DOCTYPE html>

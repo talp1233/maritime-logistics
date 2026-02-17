@@ -450,6 +450,149 @@ def launch_web():
     uvicorn.run("src.web.app:app", host="0.0.0.0", port=8000, reload=True)
 
 
+def check_risk_score(args):
+    """Check route(s) using the probabilistic risk scoring engine."""
+    from src.services.risk_scorer import score_route, compute_risk, score_to_band
+
+    route_ids = [args.route] if args.route else list(ROUTES.keys())
+    mode = "LIVE" if args.live else f"DEMO ({args.scenario})"
+
+    print("=" * 72)
+    print("  RISK SCORING ENGINE")
+    print(f"  Vessel: {args.vessel} | Mode: {mode} | Forecast: {args.days} day(s)")
+    if args.vessel_name:
+        print(f"  Vessel: {args.vessel_name}")
+    print("=" * 72)
+    print()
+
+    for route_id in route_ids:
+        if route_id not in ROUTES:
+            print(f"  Unknown route: {route_id}")
+            continue
+
+        weather_data = get_weather_data(route_id, args)
+        result = score_route(route_id, weather_data, args.vessel, args.vessel_name)
+
+        route = ROUTES[route_id]
+        print(f"  {route_id}: {route['origin']} -> {route['destination']} "
+              f"({route['distance_nm']}nm, {route['sea_area']})")
+        print(f"  Band: {result['overall_band']} | "
+              f"Max Risk: {result['max_risk_score']:.0f}/100 | "
+              f"P(cancel): {result['max_cancel_probability']:.0%} | "
+              f"P(delay): {result['max_delay_probability']:.0%}")
+
+        if args.route:
+            # Show hourly detail for single route
+            print()
+            header = (f"  {'Time':<18} {'Score':>6} {'Band':<10} "
+                      f"{'P(cancel)':>9} {'P(delay)':>9} "
+                      f"{'Wind':>6} {'Wave':>6} {'Bf':>3}")
+            print(header)
+            print("  " + "-" * 70)
+
+            current_date = None
+            for h in result["hourly"]:
+                day = h["time"][:10]
+                if day != current_date:
+                    current_date = day
+                    print(f"  --- {day} ---")
+                hour = h["time"][11:16]
+                print(f"  {hour:<18} {h['risk_score']:>5.0f} {h['band']:<10} "
+                      f"{h['cancel_probability']:>8.0%} {h['delay_probability']:>8.0%} "
+                      f"{h['wind_speed_knots']:>5.0f} {h['wave_height_m']:>5.1f} {h['beaufort']:>3}")
+        print()
+
+    if not args.route:
+        # Summary table
+        print("  " + "-" * 72)
+        print(f"  {'Route':<10} {'From':<14} {'To':<14} {'Band':<10} "
+              f"{'Score':>5} {'P(cancel)':>9} {'P(delay)':>9}")
+        print("  " + "-" * 72)
+
+
+def run_departure_optimizer(args):
+    """Find optimal departure windows for a route."""
+    from src.services.risk_scorer import score_route
+    from src.services.departure_optimizer import optimize_route_departures
+
+    route_id = args.route
+    if route_id not in ROUTES:
+        print(f"Error: Unknown route '{route_id}'")
+        return
+
+    route = ROUTES[route_id]
+    print(f"  Departure optimizer: {route['origin']} -> {route['destination']}")
+    print(f"  Vessel: {args.vessel}")
+    print()
+
+    weather_data = get_weather_data(route_id, args)
+    scored = score_route(route_id, weather_data, args.vessel, args.vessel_name)
+    results = optimize_route_departures(scored["hourly"])
+
+    for r in results:
+        print(f"  Scheduled: {r.scheduled_time}  (risk: {r.scheduled_risk:.0f}, {r.scheduled_band})")
+        print(f"    -> {r.recommendation.upper()}: {r.reason}")
+        if r.best_window:
+            bw = r.best_window
+            print(f"    Suggested: {bw.time} (risk: {bw.risk_score:.0f}, {bw.band}, "
+                  f"shift: {bw.shift_minutes:+d}min)")
+        print()
+
+
+def run_fleet_allocation(args):
+    """Run fleet allocation under current conditions."""
+    from src.services.fleet_allocator import allocate_fleet
+
+    print("=" * 60)
+    print("  FLEET ALLOCATION ENGINE")
+    print("=" * 60)
+    print()
+    print("  Using demo conditions for all routes...")
+    print()
+
+    # Generate representative conditions from demo data
+    conditions = {}
+    for route_id in ROUTES:
+        weather_data = get_weather_data(route_id, args)
+        midpoint = weather_data.get("midpoint", {})
+        weather_h = midpoint.get("weather", {}).get("hourly", {})
+        marine_h = midpoint.get("marine", {}).get("hourly", {})
+
+        winds = [w for w in weather_h.get("wind_speed_10m", []) if w]
+        waves = [w for w in marine_h.get("wave_height", []) if w]
+        dirs_ = [d for d in weather_h.get("wind_direction_10m", []) if d is not None]
+
+        conditions[route_id] = {
+            "wind_speed_knots": max(winds) if winds else 0,
+            "wave_height_m": max(waves) if waves else 0,
+            "wind_direction": dirs_[0] if dirs_ else 0,
+        }
+
+    result = allocate_fleet(list(ROUTES.keys()), conditions)
+
+    print(f"  {'Vessel':<22} {'Route':<10} {'Risk':>5} {'Band':<10} {'P(cancel)':>9} {'Primary'}")
+    print("  " + "-" * 65)
+    for a in result.assignments:
+        primary = "yes" if a.is_primary else " "
+        print(f"  {a.vessel_name:<22} {a.route_id:<10} {a.risk_score:>4.0f} "
+              f"{a.band:<10} {a.cancel_probability:>8.0%} {primary:>5}")
+    print()
+    print(f"  Fleet avg risk: {result.fleet_risk_avg:.0f} | max: {result.fleet_risk_max:.0f}")
+    if result.unassigned_routes:
+        print(f"  Unassigned routes: {', '.join(result.unassigned_routes)}")
+    print()
+
+
+def run_backtest_cmd():
+    """Run validation backtest from CLI."""
+    from src.validation.backtester import run_backtest, print_backtest_report
+
+    print("Running risk scorer backtest against ground truth data...")
+    print()
+    report = run_backtest()
+    print_backtest_report(report)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Greek Maritime Intelligence Platform -- Sailing Ban Predictor",
@@ -494,6 +637,13 @@ def main():
     )
     parser.add_argument("--web", action="store_true", help="Launch web dashboard")
 
+    # Risk scoring engine
+    parser.add_argument("--risk-score", action="store_true", help="Use probabilistic risk scoring")
+    parser.add_argument("--optimize", action="store_true", help="Find optimal departure windows")
+    parser.add_argument("--fleet", action="store_true", help="Run fleet allocation engine")
+    parser.add_argument("--backtest", action="store_true", help="Validate risk scorer against ground truth")
+    parser.add_argument("--vessel-name", type=str, default=None, help="Specific vessel name (e.g. 'Blue Star Delos')")
+
     args = parser.parse_args()
 
     if args.test_api:
@@ -526,6 +676,22 @@ def main():
 
     if args.web:
         launch_web()
+        return
+
+    if args.backtest:
+        run_backtest_cmd()
+        return
+
+    if args.fleet:
+        run_fleet_allocation(args)
+        return
+
+    if args.risk_score:
+        check_risk_score(args)
+        return
+
+    if args.route and args.optimize:
+        run_departure_optimizer(args)
         return
 
     if args.route:
