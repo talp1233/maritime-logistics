@@ -48,13 +48,27 @@ PATTERN_REPORT = DATA_DIR / "temporal" / "pattern_analysis.json"
 # Cancellation dates confirmed from news sources (our time window)
 # Format: date -> {beaufort, ports_affected, source}
 CONFIRMED_BAN_DATES = {
-    "2026-01-03": {"beaufort": 7, "ports": ["PIR", "RAF"], "source": "greekcitytimes.com"},
-    "2026-01-04": {"beaufort": 7, "ports": ["PIR", "RAF"], "source": "greekcitytimes.com"},
-    "2026-01-08": {"beaufort": 9, "ports": ["PIR", "RAF", "LAV"], "source": "keeptalkinggreece.com"},
-    "2026-01-10": {"beaufort": 9, "ports": ["PIR"], "source": "greekreporter.com"},
-    "2026-01-21": {"beaufort": 9, "ports": ["PIR", "RAF", "LAV"], "source": "tovima.com"},
-    "2026-01-26": {"beaufort": 8, "ports": ["PIR", "RAF", "LAV"], "source": "athens24.com"},
-    "2026-02-15": {"beaufort": 9, "ports": ["PIR", "RAF", "LAV"], "source": "in.gr"},
+    # Winter 2025
+    "2025-02-15": {"beaufort": 9, "ports": ["PIR", "RAF", "LAV"], "source": "tovima.com", "season": "winter"},
+    # Spring 2025
+    "2025-03-18": {"beaufort": 9, "ports": ["PIR", "RAF"], "source": "keeptalkinggreece.com", "season": "spring"},
+    "2025-03-19": {"beaufort": 9, "ports": ["PIR", "RAF", "LAV"], "source": "keeptalkinggreece.com", "season": "spring"},
+    "2025-04-28": {"beaufort": 9, "ports": ["PIR", "RAF"], "source": "keeptalkinggreece.com", "season": "spring"},
+    "2025-04-29": {"beaufort": 8, "ports": ["PIR", "RAF"], "source": "travelandtourworld.com", "season": "spring"},
+    # Summer 2025
+    "2025-06-29": {"beaufort": 8, "ports": ["PIR", "RAF", "LAV"], "source": "keeptalkinggreece.com", "season": "summer"},
+    "2025-08-08": {"beaufort": 9, "ports": ["PIR", "RAF", "LAV"], "source": "euronews.com", "season": "summer"},
+    # Autumn 2025
+    "2025-09-19": {"beaufort": 9, "ports": ["PIR", "RAF", "LAV"], "source": "greekcitytimes.com", "season": "autumn"},
+    # Winter 2025-2026
+    "2025-12-24": {"beaufort": 9, "ports": ["PIR", "RAF", "LAV"], "source": "travelandtourworld.com", "season": "winter"},
+    "2026-01-03": {"beaufort": 7, "ports": ["PIR", "RAF"], "source": "greekcitytimes.com", "season": "winter"},
+    "2026-01-04": {"beaufort": 7, "ports": ["PIR", "RAF"], "source": "greekcitytimes.com", "season": "winter"},
+    "2026-01-08": {"beaufort": 9, "ports": ["PIR", "RAF", "LAV"], "source": "keeptalkinggreece.com", "season": "winter"},
+    "2026-01-10": {"beaufort": 9, "ports": ["PIR"], "source": "greekreporter.com", "season": "winter"},
+    "2026-01-21": {"beaufort": 9, "ports": ["PIR", "RAF", "LAV"], "source": "tovima.com", "season": "winter"},
+    "2026-01-26": {"beaufort": 8, "ports": ["PIR", "RAF", "LAV"], "source": "athens24.com", "season": "winter"},
+    "2026-02-15": {"beaufort": 9, "ports": ["PIR", "RAF", "LAV"], "source": "in.gr", "season": "winter"},
 }
 
 # Routes we track
@@ -78,7 +92,7 @@ def load_real_events() -> list[dict]:
 
 
 def build_real_ground_truth(
-    start_date: str = "2025-12-01",
+    start_date: str = "2025-02-15",
     end_date: str = "2026-02-15",
 ) -> list[dict]:
     """
@@ -397,12 +411,50 @@ def analyze_patterns(augmented_records: list[dict]) -> dict:
             "detectable": ratio > 1.3,
         }
 
+    # Seasonal analysis
+    def get_season(date_str):
+        month = int(date_str[5:7])
+        if month in (12, 1, 2):
+            return "winter"
+        elif month in (3, 4, 5):
+            return "spring"
+        elif month in (6, 7, 8):
+            return "summer"
+        else:
+            return "autumn"
+
+    seasonal_stats = {}
+    for season in ["winter", "spring", "summer", "autumn"]:
+        season_cancelled = [r for r in cancelled if get_season(r["date"]) == season]
+        season_sailed = [r for r in sailed if get_season(r["date"]) == season]
+        season_total = len(season_cancelled) + len(season_sailed)
+        season_rate = len(season_cancelled) / season_total if season_total else 0
+
+        season_ban_dates = [d for d, info in CONFIRMED_BAN_DATES.items() if info.get("season") == season]
+        avg_bf = 0
+        if season_ban_dates:
+            avg_bf = sum(CONFIRMED_BAN_DATES[d]["beaufort"] for d in season_ban_dates) / len(season_ban_dates)
+
+        seasonal_stats[season] = {
+            "cancelled": len(season_cancelled),
+            "sailed": len(season_sailed),
+            "total": season_total,
+            "cancel_rate": round(season_rate, 3),
+            "ban_events": len(season_ban_dates),
+            "ban_dates": season_ban_dates,
+            "avg_beaufort": round(avg_bf, 1),
+            "avg_peak_wind": round(
+                sum(r["temporal_features"][33] for r in season_cancelled) / len(season_cancelled), 1
+            ) if season_cancelled else 0,
+        }
+
     report = {
         "summary": {
             "total_records": len(augmented_records),
             "cancelled_with_features": len(cancelled),
             "sailed_with_features": len(sailed),
             "ban_dates": list(CONFIRMED_BAN_DATES.keys()),
+            "date_range": f"{min(r['date'] for r in augmented_records)} to {max(r['date'] for r in augmented_records)}",
         },
         "wind_buildup": {
             "cancellation_days": wind_buildup_cancel,
@@ -437,6 +489,7 @@ def analyze_patterns(augmented_records: list[dict]) -> dict:
         },
         "early_warning_divergence": divergence,
         "route_specific": route_stats,
+        "seasonal": seasonal_stats,
     }
 
     # Save report
@@ -561,6 +614,32 @@ def print_pattern_report(report: dict) -> None:
                   f"{rs['avg_peak_wind_sail']:>9.1f}")
     print()
 
+    # Seasonal analysis
+    if report.get("seasonal"):
+        print("  SEASONAL ANALYSIS (Feb 2025 - Feb 2026)")
+        print("  " + "-" * 60)
+        print(f"  {'Season':<10} {'Ban Events':>11} {'Cancelled':>10} {'Sailed':>8} "
+              f"{'Rate':>7} {'Avg Bf':>7} {'Peak Wind':>10}")
+
+        season_order = ["winter", "spring", "summer", "autumn"]
+        for season in season_order:
+            ss = report["seasonal"].get(season, {})
+            if ss:
+                bar = "#" * int(ss["cancel_rate"] * 30)
+                print(f"  {season:<10} {ss['ban_events']:>11} {ss['cancelled']:>10} "
+                      f"{ss['sailed']:>8} {ss['cancel_rate']:>6.1%} "
+                      f"{ss['avg_beaufort']:>6.1f} {ss['avg_peak_wind']:>9.1f}  {bar}")
+        print()
+
+        # Seasonal insights
+        print("  Seasonal patterns:")
+        for season in season_order:
+            ss = report["seasonal"].get(season, {})
+            if ss and ss["ban_dates"]:
+                print(f"    {season.capitalize()}: {ss['ban_events']} ban events "
+                      f"({', '.join(ss['ban_dates'])})")
+        print()
+
     # Key findings
     print("  KEY FINDINGS:")
     print("  " + "-" * 60)
@@ -581,6 +660,14 @@ def print_pattern_report(report: dict) -> None:
     if wind_slope_cancel > wind_slope_sail * 1.5:
         print(f"  - Cancellation events show {wind_slope_cancel/max(wind_slope_sail,0.01):.1f}x "
               f"steeper wind increase")
+
+    # Seasonal insight
+    if report.get("seasonal"):
+        winter = report["seasonal"].get("winter", {})
+        summer = report["seasonal"].get("summer", {})
+        if winter.get("ban_events", 0) > summer.get("ban_events", 0):
+            print(f"  - Winter has {winter['ban_events']}x more ban events than summer ({summer.get('ban_events', 0)})")
+            print(f"    Winter cancellation rate: {winter['cancel_rate']:.1%} vs Summer: {summer.get('cancel_rate', 0):.1%}")
 
     print()
 
@@ -667,14 +754,34 @@ def run_full_analysis(fetch_weather: bool = True) -> dict:
             "validation": validation_report,
         }
     else:
-        print("Step 2: Skipping weather fetch (use --fetch to enable)")
-        print("  Run with internet access to fetch real weather data.")
+        print("Step 2: Estimating weather from reported Beaufort levels + storm patterns...")
+        from src.data_collection.real_weather_estimator import build_real_temporal_features
+        augmented = build_real_temporal_features(records)
+        print(f"  Built features for {len(augmented)} records")
         print()
 
-        # Just show ground truth stats
+        # Save temporal dataset
+        print("Step 3: Saving real temporal dataset...")
+        stats = save_real_temporal_dataset(augmented)
+        print(f"  Saved {stats['total_records']} records to {stats['csv_path']}")
+        print()
+
+        # Analyze patterns
+        print("Step 4: Analyzing weather patterns...")
+        pattern_report = analyze_patterns(augmented)
+        print_pattern_report(pattern_report)
+
+        # Train and validate
+        print("Step 5: Training temporal models on real event dates...")
+        from src.models.temporal_predictor import print_temporal_report
+        validation_report = train_and_validate_real(augmented)
+        print_temporal_report(validation_report)
+
         return {
             "ground_truth": {"total": len(records), "cancelled": cancelled},
-            "message": "Run with internet access for full analysis",
+            "weather_source": "estimated_from_beaufort",
+            "patterns": pattern_report,
+            "validation": validation_report,
         }
 
 
