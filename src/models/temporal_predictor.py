@@ -52,7 +52,11 @@ def _mask_features_for_lead_time(features: list[float], days_visible: int) -> li
     Mask features that wouldn't be available at a given lead time.
 
     At D-3, we only have D-5, D-4, D-3 data (3 days).
-    D-2, D-1, D-0 are unknown → fill with D-3's values (persistence forecast).
+    D-2, D-1, D-0 are unknown → fill with **trend extrapolation**.
+
+    Old approach: persistence (repeat last known value)
+    New approach: if trend is rising, extrapolate forward using the slope.
+    This prevents the "D-3 hole" where persistence masks the storm buildup.
 
     Feature layout:
         [0:6]   = wind_mean D-5..D-0
@@ -67,16 +71,30 @@ def _mask_features_for_lead_time(features: list[float], days_visible: int) -> li
     if days_visible >= n_days:
         return masked
 
-    # For each per-day feature block, fill future days with last known day
+    # For each per-day feature block, extrapolate future days using trend
     for block_start in [0, 6, 12, 18]:
-        last_known_idx = block_start + days_visible - 1
-        last_known_val = masked[last_known_idx]
-        for i in range(last_known_idx + 1, block_start + n_days):
-            masked[i] = last_known_val
+        visible_vals = [masked[block_start + i] for i in range(days_visible)]
+
+        # Compute trend slope from visible data
+        slope = _linear_slope(visible_vals) if len(visible_vals) >= 2 else 0.0
+        last_known_val = visible_vals[-1]
+
+        # Extrapolate: each future day continues the trend
+        # Cap extrapolation to avoid runaway values (max 2x last known)
+        for step, i in enumerate(
+            range(block_start + days_visible, block_start + n_days), start=1
+        ):
+            extrapolated = last_known_val + slope * step
+            # Clamp: never go below 0, never exceed 2x last known
+            extrapolated = max(0, min(extrapolated, last_known_val * 2.0))
+            # If slope is negative or near zero, use persistence
+            if slope <= 0:
+                extrapolated = last_known_val
+            masked[i] = extrapolated
 
     # Recompute trend features based on visible data only
-    visible_wind_means = masked[0:days_visible]
-    visible_wave_means = masked[12:12 + days_visible]
+    visible_wind_means = [masked[i] for i in range(days_visible)]
+    visible_wave_means = [masked[12 + i] for i in range(days_visible)]
 
     # wind_trend_slope (index 24)
     masked[24] = _linear_slope(visible_wind_means)

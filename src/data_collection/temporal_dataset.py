@@ -530,13 +530,16 @@ def load_temporal_dataset(
         (X, y) where X is list of feature vectors, y is list of labels.
     """
     if csv_path is None:
-        csv_path = DATA_DIR / "temporal_dataset.csv"
+        # Prefer real dataset; fall back to synthetic if needed
+        real_path = DATA_DIR / "real_temporal_dataset.csv"
+        synth_path = DATA_DIR / "temporal_dataset.csv"
+        csv_path = real_path if real_path.exists() else synth_path
     csv_path = Path(csv_path)
 
     if not csv_path.exists():
         raise FileNotFoundError(
             f"Temporal dataset not found at {csv_path}. "
-            "Run `python main.py --build-temporal` first."
+            "Run `python main.py --build-temporal` or real analysis first."
         )
 
     X: list[list[float]] = []

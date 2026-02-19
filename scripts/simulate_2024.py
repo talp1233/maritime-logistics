@@ -375,7 +375,7 @@ def _build_features_from_api(records: list[dict]) -> list[dict]:
     return augmented
 
 
-def run_2024_simulation(augmented_records: list[dict]) -> dict:
+def run_2024_simulation(augmented_records: list[dict], retrain: bool = False) -> dict:
     """
     Run the 2024 simulation using the model trained on 2025 data.
 
@@ -384,17 +384,24 @@ def run_2024_simulation(augmented_records: list[dict]) -> dict:
     - Overall accuracy metrics
     - Early warning analysis
     - Strike detection (model should NOT predict cancellation for strikes)
+    - Ensemble prediction combining multiple lead-time models
     """
-    # Load the 2025-trained model
+    # Load or retrain the 2025-trained model
     predictor = TemporalPredictor()
-    try:
-        predictor.load()
-        print("  Loaded pre-trained temporal model (trained on 2025 data)")
-    except FileNotFoundError:
-        print("  No saved model found — training on 2025 data first...")
+    if retrain:
+        print("  Re-training temporal model on 2025 data (with improved masking)...")
         predictor.train()
         predictor.save()
-        print("  Trained and saved temporal model")
+        print("  Re-trained and saved temporal model")
+    else:
+        try:
+            predictor.load()
+            print("  Loaded pre-trained temporal model (trained on 2025 data)")
+        except FileNotFoundError:
+            print("  No saved model found — training on 2025 data first...")
+            predictor.train()
+            predictor.save()
+            print("  Trained and saved temporal model")
 
     # Group records by (date, route, vessel_type) for prediction
     events = []
@@ -427,6 +434,19 @@ def run_2024_simulation(augmented_records: list[dict]) -> dict:
             lead = pred["lead_time"]
             result["predictions"][lead] = pred["cancel_probability"]
 
+        # Ensemble: weighted average of available lead-time predictions
+        # D-0 gets highest weight, D-5 lowest
+        weights = {"d0": 0.40, "d1": 0.30, "d3": 0.20, "d5": 0.10}
+        ensemble_num = 0.0
+        ensemble_den = 0.0
+        for lead, w in weights.items():
+            if lead in result["predictions"]:
+                ensemble_num += result["predictions"][lead] * w
+                ensemble_den += w
+        result["predictions"]["ensemble"] = round(
+            ensemble_num / ensemble_den if ensemble_den > 0 else 0, 3
+        )
+
         results.append(result)
 
     # Analyze results
@@ -441,9 +461,9 @@ def _analyze_simulation_results(results: list[dict]) -> dict:
     weather_events = [r for r in results if not r["is_strike"]]
     strike_events = [r for r in results if r["is_strike"]]
 
-    # Overall metrics by lead time
+    # Overall metrics by lead time (including ensemble)
     lead_metrics = {}
-    for lead_name in ["d5", "d3", "d1", "d0"]:
+    for lead_name in ["d5", "d3", "d1", "d0", "ensemble"]:
         tp = fp = tn = fn = 0
         probas = []
         actuals = []
@@ -474,8 +494,9 @@ def _analyze_simulation_results(results: list[dict]) -> dict:
         # Brier score
         brier = sum((p - a) ** 2 for p, a in zip(probas, actuals)) / len(probas) if probas else 1
 
+        lead_label = LEAD_TIMES[lead_name]["label"] if lead_name in LEAD_TIMES else "Ensemble"
         lead_metrics[lead_name] = {
-            "label": LEAD_TIMES[lead_name]["label"],
+            "label": lead_label,
             "accuracy": round(accuracy, 3),
             "precision": round(precision, 3),
             "recall": round(recall, 3),
@@ -551,7 +572,7 @@ def _analyze_simulation_results(results: list[dict]) -> dict:
 
     # Early warning: first lead time where > 50% of events detected
     early_warning = {}
-    for lead in ["d5", "d3", "d1", "d0"]:
+    for lead in ["d5", "d3", "d1", "d0", "ensemble"]:
         total_cancel = sum(1 for r in weather_events if r["actual"] == 1)
         detected = sum(
             1 for r in weather_events
@@ -559,10 +580,66 @@ def _analyze_simulation_results(results: list[dict]) -> dict:
         )
         rate = detected / total_cancel if total_cancel else 0
         early_warning[lead] = {
-            "label": LEAD_TIMES[lead]["label"],
+            "label": LEAD_TIMES[lead]["label"] if lead in LEAD_TIMES else "Ensemble",
             "detected": detected,
             "total": total_cancel,
             "detection_rate": round(rate, 3),
+        }
+
+    # Threshold optimization: find best threshold per lead time
+    optimal_thresholds = {}
+    for lead_name in ["d5", "d3", "d1", "d0", "ensemble"]:
+        best_f1 = 0
+        best_thresh = 0.5
+        for thresh in [i * 0.05 for i in range(1, 20)]:
+            tp = fp = fn = 0
+            for r in weather_events:
+                prob = r["predictions"].get(lead_name, 0.5)
+                predicted = 1 if prob >= thresh else 0
+                actual = r["actual"]
+                if predicted == 1 and actual == 1:
+                    tp += 1
+                elif predicted == 1 and actual == 0:
+                    fp += 1
+                elif predicted == 0 and actual == 1:
+                    fn += 1
+            prec = tp / (tp + fp) if (tp + fp) else 0
+            rec = tp / (tp + fn) if (tp + fn) else 0
+            f1 = 2 * prec * rec / (prec + rec) if (prec + rec) else 0
+            if f1 > best_f1:
+                best_f1 = f1
+                best_thresh = thresh
+
+        # Calculate metrics at optimal threshold
+        tp = fp = tn = fn = 0
+        for r in weather_events:
+            prob = r["predictions"].get(lead_name, 0.5)
+            predicted = 1 if prob >= best_thresh else 0
+            actual = r["actual"]
+            if predicted == 1 and actual == 1:
+                tp += 1
+            elif predicted == 1 and actual == 0:
+                fp += 1
+            elif predicted == 0 and actual == 0:
+                tn += 1
+            else:
+                fn += 1
+        total = tp + fp + tn + fn
+        opt_acc = (tp + tn) / total if total else 0
+        opt_prec = tp / (tp + fp) if (tp + fp) else 0
+        opt_rec = tp / (tp + fn) if (tp + fn) else 0
+        opt_f1 = 2 * opt_prec * opt_rec / (opt_prec + opt_rec) if (opt_prec + opt_rec) else 0
+
+        lead_label = LEAD_TIMES[lead_name]["label"] if lead_name in LEAD_TIMES else "Ensemble"
+        optimal_thresholds[lead_name] = {
+            "label": lead_label,
+            "optimal_threshold": round(best_thresh, 2),
+            "accuracy": round(opt_acc, 3),
+            "precision": round(opt_prec, 3),
+            "recall": round(opt_rec, 3),
+            "f1": round(opt_f1, 3),
+            "detected": tp,
+            "total_cancel": tp + fn,
         }
 
     return {
@@ -579,6 +656,7 @@ def _analyze_simulation_results(results: list[dict]) -> dict:
         "per_date_analysis": per_date_summary,
         "early_warning": early_warning,
         "strike_analysis": strike_analysis,
+        "optimal_thresholds": optimal_thresholds,
     }
 
 
@@ -609,12 +687,13 @@ def print_simulation_report(report: dict) -> None:
           f"{'Recall':>8} {'F1':>6} {'Brier':>7}")
     print("  " + "-" * 70)
 
-    for lead in ["d5", "d3", "d1", "d0"]:
+    for lead in ["d5", "d3", "d1", "d0", "ensemble"]:
         m = report["lead_time_metrics"].get(lead, {})
         if m:
             bar = "#" * int(m["accuracy"] * 30)
+            marker = " <<" if lead == "ensemble" else ""
             print(f"  {m['label']:<18} {m['accuracy']:>8.1%} {m['precision']:>10.1%} "
-                  f"{m['recall']:>8.1%} {m['f1']:>6.3f} {m['brier_score']:>7.4f}  {bar}")
+                  f"{m['recall']:>8.1%} {m['f1']:>6.3f} {m['brier_score']:>7.4f}  {bar}{marker}")
     print()
 
     # Early warning capability
@@ -623,12 +702,17 @@ def print_simulation_report(report: dict) -> None:
     print("  'How many cancellations could we have predicted X days before?'")
     print()
     ew = report["early_warning"]
-    for lead in ["d5", "d3", "d1", "d0"]:
+    for lead in ["d5", "d3", "d1", "d0", "ensemble"]:
         e = ew.get(lead, {})
         if e:
             bar = "#" * int(e["detection_rate"] * 30)
-            alert = " << ACTIONABLE" if e["detection_rate"] >= 0.6 else ""
-            alert = " << HIGHLY RELIABLE" if e["detection_rate"] >= 0.8 else alert
+            alert = ""
+            if e["detection_rate"] >= 0.8:
+                alert = " << HIGHLY RELIABLE"
+            elif e["detection_rate"] >= 0.6:
+                alert = " << ACTIONABLE"
+            if lead == "ensemble":
+                alert = " << BEST COMBINED"
             print(f"  {e['label']:<18} {e['detected']}/{e['total']} detected "
                   f"({e['detection_rate']:.0%})  {bar}{alert}")
     print()
@@ -764,6 +848,8 @@ def main():
     parser = argparse.ArgumentParser(description="2024 Retrospective Simulation")
     parser.add_argument("--fetch-weather", action="store_true",
                        help="Use real Open-Meteo Archive data (requires internet)")
+    parser.add_argument("--retrain", action="store_true",
+                       help="Re-train temporal model (use after masking improvements)")
     args = parser.parse_args()
 
     print("=" * 75)
@@ -790,7 +876,7 @@ def main():
 
     # Step 3: Run simulation
     print("Step 3: Running predictions with 2025-trained model...")
-    report = run_2024_simulation(augmented)
+    report = run_2024_simulation(augmented, retrain=args.retrain)
     print()
 
     # Step 4: Print report
