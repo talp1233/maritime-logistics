@@ -651,6 +651,13 @@ def backtest_temporal_cmd():
     print_temporal_report(report)
 
 
+def analyze_real_cmd(fetch_weather: bool = False):
+    """Analyze real cancellation events with weather patterns."""
+    from src.data_collection.real_cancellation_analyzer import run_full_analysis
+
+    run_full_analysis(fetch_weather=fetch_weather)
+
+
 def run_backtest_cmd():
     """Run validation backtest from CLI."""
     from src.validation.backtester import run_backtest, print_backtest_report
@@ -722,6 +729,12 @@ def main():
     parser.add_argument("--backtest-temporal", action="store_true",
                         help="Backtest temporal predictions and show accuracy at each lead time")
 
+    # Real cancellation analysis
+    parser.add_argument("--analyze-real", action="store_true",
+                        help="Analyze real cancellation events (scraped from news) with weather patterns")
+    parser.add_argument("--fetch-real-weather", action="store_true",
+                        help="Fetch weather for real cancellation dates (requires internet)")
+
     args = parser.parse_args()
 
     if args.test_api:
@@ -770,6 +783,10 @@ def main():
 
     if args.backtest_temporal:
         backtest_temporal_cmd()
+        return
+
+    if args.analyze_real:
+        analyze_real_cmd(fetch_weather=args.fetch_real_weather)
         return
 
     if args.backtest:
