@@ -1,0 +1,252 @@
+{
+  "summary": {
+    "total_records": 3660,
+    "weather_events": 3650,
+    "strike_events": 10,
+    "cancellations_weather": 91,
+    "sailed_weather": 3559,
+    "ban_dates": [
+      "2024-01-21",
+      "2024-01-22",
+      "2024-04-23",
+      "2024-04-24",
+      "2024-07-12",
+      "2024-07-13",
+      "2024-08-10",
+      "2024-10-22",
+      "2024-11-15",
+      "2024-12-27",
+      "2024-12-28"
+    ],
+    "year": 2024
+  },
+  "lead_time_metrics": {
+    "d5": {
+      "label": "5 days before",
+      "accuracy": 0.987,
+      "precision": 0.906,
+      "recall": 0.527,
+      "f1": 0.667,
+      "brier_score": 0.0121,
+      "tp": 48,
+      "fp": 5,
+      "tn": 3554,
+      "fn": 43,
+      "total": 3650
+    },
+    "d3": {
+      "label": "3 days before",
+      "accuracy": 0.949,
+      "precision": 0.12,
+      "recall": 0.165,
+      "f1": 0.139,
+      "brier_score": 0.0537,
+      "tp": 15,
+      "fp": 110,
+      "tn": 3449,
+      "fn": 76,
+      "total": 3650
+    },
+    "d1": {
+      "label": "1 day before",
+      "accuracy": 0.919,
+      "precision": 0.232,
+      "recall": 0.978,
+      "f1": 0.375,
+      "brier_score": 0.0814,
+      "tp": 89,
+      "fp": 295,
+      "tn": 3264,
+      "fn": 2,
+      "total": 3650
+    },
+    "d0": {
+      "label": "Departure day",
+      "accuracy": 0.991,
+      "precision": 1.0,
+      "recall": 0.648,
+      "f1": 0.787,
+      "brier_score": 0.0088,
+      "tp": 59,
+      "fp": 0,
+      "tn": 3559,
+      "fn": 32,
+      "total": 3650
+    }
+  },
+  "per_date_analysis": {
+    "2024-01-21": {
+      "beaufort": 9,
+      "source": "keeptalkinggreece.com",
+      "notes": "Snowstorm + gale-force winds Bf9. PIR/RAF/LAV sailing ban. Volos-Sporades, Kavala-Thassos, Alex-Samothraki also closed. Schools closed Jan 22.",
+      "events_count": 10,
+      "avg_d0_prob": 0.7,
+      "avg_d1_prob": 1.0,
+      "avg_d3_prob": 0.182,
+      "avg_d5_prob": 0.4,
+      "detected_d0": "7/10",
+      "detected_d1": "10/10",
+      "detected_d3": "1/10",
+      "detected_d5": "4/10"
+    },
+    "2024-01-22": {
+      "beaufort": 8,
+      "source": "keeptalkinggreece.com",
+      "notes": "Continued gale-force winds from Jan 21 storm. Ban extended into Monday morning.",
+      "events_count": 10,
+      "avg_d0_prob": 0.3,
+      "avg_d1_prob": 0.9,
+      "avg_d3_prob": 0.055,
+      "avg_d5_prob": 0.281,
+      "detected_d0": "3/10",
+      "detected_d1": "9/10",
+      "detected_d3": "0/10",
+      "detected_d5": "3/10"
+    },
+    "2024-04-23": {
+      "beaufort": 8,
+      "source": "bluestarferries.com",
+      "notes": "Blue Star Naxos PIR 22:00 to SYR/PAR/NAX/Katapola/Koufonisi/Schinoussa/Iraklia cancelled. Sailing ban.",
+      "events_count": 8,
+      "avg_d0_prob": 0.75,
+      "avg_d1_prob": 1.0,
+      "avg_d3_prob": 0.261,
+      "avg_d5_prob": 0.583,
+      "detected_d0": "6/8",
+      "detected_d1": "8/8",
+      "detected_d3": "1/8",
+      "detected_d5": "5/8"
+    },
+    "2024-04-24": {
+      "beaufort": 8,
+      "source": "hellenicseaways.gr",
+      "notes": "Hellenic Highspeed from LAV to Ag.Efstratios/Limnos/Kavala cancelled. Return cancelled too.",
+      "events_count": 8,
+      "avg_d0_prob": 0.75,
+      "avg_d1_prob": 1.0,
+      "avg_d3_prob": 0.204,
+      "avg_d5_prob": 0.741,
+      "detected_d0": "6/8",
+      "detected_d1": "8/8",
+      "detected_d3": "0/8",
+      "detected_d5": "6/8"
+    },
+    "2024-07-12": {
+      "beaufort": 8,
+      "source": "open-meteo-archive+historical-pattern",
+      "notes": "Meltemi period: strong northerlies Bf8 in central Cyclades. HSC cancelled, some conventional routes disrupted.",
+      "events_count": 10,
+      "avg_d0_prob": 0.7,
+      "avg_d1_prob": 0.9,
+      "avg_d3_prob": 0.376,
+      "avg_d5_prob": 0.699,
+      "detected_d0": "7/10",
+      "detected_d1": "9/10",
+      "detected_d3": "3/10",
+      "detected_d5": "7/10"
+    },
+    "2024-07-13": {
+      "beaufort": 7,
+      "source": "open-meteo-archive+historical-pattern",
+      "notes": "Meltemi continuation. HSC suspended, conventional sailed with delays.",
+      "events_count": 5,
+      "avg_d0_prob": 0.8,
+      "avg_d1_prob": 1.0,
+      "avg_d3_prob": 0.267,
+      "avg_d5_prob": 0.6,
+      "detected_d0": "4/5",
+      "detected_d1": "5/5",
+      "detected_d3": "0/5",
+      "detected_d5": "3/5"
+    },
+    "2024-08-10": {
+      "beaufort": 8,
+      "source": "open-meteo-archive+historical-pattern",
+      "notes": "Peak Meltemi event. Bf8 across Cyclades. HSC all cancelled. Some conventional routes cancelled.",
+      "events_count": 10,
+      "avg_d0_prob": 0.7,
+      "avg_d1_prob": 1.0,
+      "avg_d3_prob": 0.386,
+      "avg_d5_prob": 0.597,
+      "detected_d0": "7/10",
+      "detected_d1": "10/10",
+      "detected_d3": "3/10",
+      "detected_d5": "6/10"
+    },
+    "2024-11-15": {
+      "beaufort": 8,
+      "source": "open-meteo-archive+seasonal-pattern",
+      "notes": "Autumn storm system. Bf8 winds, sailing ban PIR/RAF/LAV.",
+      "events_count": 10,
+      "avg_d0_prob": 0.6,
+      "avg_d1_prob": 1.0,
+      "avg_d3_prob": 0.203,
+      "avg_d5_prob": 0.442,
+      "detected_d0": "6/10",
+      "detected_d1": "10/10",
+      "detected_d3": "1/10",
+      "detected_d5": "4/10"
+    },
+    "2024-12-27": {
+      "beaufort": 8,
+      "source": "greekcitytimes.com",
+      "notes": "Strong winds Bf8, gusts 10 Bf. PIR/RAF/LAV ban. Cyclades routes particularly affected. EMY warning.",
+      "events_count": 10,
+      "avg_d0_prob": 0.5,
+      "avg_d1_prob": 1.0,
+      "avg_d3_prob": 0.227,
+      "avg_d5_prob": 0.356,
+      "detected_d0": "5/10",
+      "detected_d1": "10/10",
+      "detected_d3": "2/10",
+      "detected_d5": "3/10"
+    },
+    "2024-12-28": {
+      "beaufort": 8,
+      "source": "greekcitytimes.com",
+      "notes": "Continuation of Dec 27 storm. Some routes resumed PM.",
+      "events_count": 10,
+      "avg_d0_prob": 0.8,
+      "avg_d1_prob": 1.0,
+      "avg_d3_prob": 0.413,
+      "avg_d5_prob": 0.681,
+      "detected_d0": "8/10",
+      "detected_d1": "10/10",
+      "detected_d3": "4/10",
+      "detected_d5": "7/10"
+    }
+  },
+  "early_warning": {
+    "d5": {
+      "label": "5 days before",
+      "detected": 48,
+      "total": 91,
+      "detection_rate": 0.527
+    },
+    "d3": {
+      "label": "3 days before",
+      "detected": 15,
+      "total": 91,
+      "detection_rate": 0.165
+    },
+    "d1": {
+      "label": "1 day before",
+      "detected": 89,
+      "total": 91,
+      "detection_rate": 0.978
+    },
+    "d0": {
+      "label": "Departure day",
+      "detected": 59,
+      "total": 91,
+      "detection_rate": 0.648
+    }
+  },
+  "strike_analysis": {
+    "strike_events": 10,
+    "false_alarms_d0": 0,
+    "false_alarm_rate": 0.0,
+    "avg_d0_prob": 0.0,
+    "interpretation": "Model correctly identifies these as LOW risk (weather was fine, cancellation was due to strike)"
+  }
+}
