@@ -46,7 +46,7 @@ from src.data_collection.temporal_dataset import (
 from src.data_collection.real_weather_estimator import (
     estimate_5day_weather, estimate_normal_day_weather,
 )
-from src.models.temporal_predictor import TemporalPredictor, LEAD_TIMES
+from src.models.temporal_predictor import TemporalPredictor, LEAD_TIMES, CALIBRATED_THRESHOLDS
 
 DATA_DIR = PROJECT_ROOT / "data"
 REPORT_DIR = PROJECT_ROOT / "reports"
@@ -470,7 +470,8 @@ def _analyze_simulation_results(results: list[dict]) -> dict:
 
         for r in weather_events:
             prob = r["predictions"].get(lead_name, 0.5)
-            predicted = 1 if prob >= 0.5 else 0
+            thresh = CALIBRATED_THRESHOLDS.get(lead_name, 0.5)
+            predicted = 1 if prob >= thresh else 0
             actual = r["actual"]
 
             probas.append(prob)
@@ -534,10 +535,10 @@ def _analyze_simulation_results(results: list[dict]) -> dict:
         avg_d3 = sum(d3_probs) / len(d3_probs) if d3_probs else 0
         avg_d5 = sum(d5_probs) / len(d5_probs) if d5_probs else 0
 
-        detected_d0 = sum(1 for p in d0_probs if p >= 0.5)
-        detected_d1 = sum(1 for p in d1_probs if p >= 0.5)
-        detected_d3 = sum(1 for p in d3_probs if p >= 0.5)
-        detected_d5 = sum(1 for p in d5_probs if p >= 0.5)
+        detected_d0 = sum(1 for p in d0_probs if p >= CALIBRATED_THRESHOLDS.get("d0", 0.5))
+        detected_d1 = sum(1 for p in d1_probs if p >= CALIBRATED_THRESHOLDS.get("d1", 0.5))
+        detected_d3 = sum(1 for p in d3_probs if p >= CALIBRATED_THRESHOLDS.get("d3", 0.5))
+        detected_d5 = sum(1 for p in d5_probs if p >= CALIBRATED_THRESHOLDS.get("d5", 0.5))
 
         per_date_summary[date_str] = {
             "beaufort": ban_info.get("beaufort", "?"),
@@ -576,7 +577,7 @@ def _analyze_simulation_results(results: list[dict]) -> dict:
         total_cancel = sum(1 for r in weather_events if r["actual"] == 1)
         detected = sum(
             1 for r in weather_events
-            if r["actual"] == 1 and r["predictions"].get(lead, 0) >= 0.5
+            if r["actual"] == 1 and r["predictions"].get(lead, 0) >= CALIBRATED_THRESHOLDS.get(lead, 0.5)
         )
         rate = detected / total_cancel if total_cancel else 0
         early_warning[lead] = {

@@ -35,17 +35,43 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Winter Aegean climatology (December-February)
+# ── Seasonal Aegean Climatology ─────────────────────────────────────
 # Based on published statistics for the Central Aegean
-WINTER_AEGEAN_BASELINE = {
-    "mean_wind_kn": 14.0,    # Average winter wind
-    "std_wind_kn": 6.0,      # Standard deviation
-    "mean_wave_m": 1.2,      # Average winter wave height
-    "std_wave_m": 0.5,       # Standard deviation
-    "strong_wind_prob": 0.15, # Probability of Bf >= 6 on any day
+SEASONAL_AEGEAN_BASELINE = {
+    "winter": {  # Dec-Feb
+        "mean_wind_kn": 14.0,
+        "std_wind_kn": 6.0,
+        "mean_wave_m": 1.2,
+        "std_wave_m": 0.5,
+        "strong_wind_prob": 0.15,
+    },
+    "spring": {  # Mar-May
+        "mean_wind_kn": 11.0,
+        "std_wind_kn": 5.0,
+        "mean_wave_m": 0.9,
+        "std_wave_m": 0.4,
+        "strong_wind_prob": 0.08,
+    },
+    "summer": {  # Jun-Aug — includes Meltemi background
+        "mean_wind_kn": 16.0,   # Meltemi raises the summer average
+        "std_wind_kn": 7.0,
+        "mean_wave_m": 1.0,
+        "std_wave_m": 0.5,
+        "strong_wind_prob": 0.12,
+    },
+    "autumn": {  # Sep-Nov
+        "mean_wind_kn": 12.0,
+        "std_wind_kn": 5.5,
+        "mean_wave_m": 1.0,
+        "std_wave_m": 0.4,
+        "strong_wind_prob": 0.10,
+    },
 }
 
-# Storm evolution patterns for the Aegean
+# For backward compatibility
+WINTER_AEGEAN_BASELINE = SEASONAL_AEGEAN_BASELINE["winter"]
+
+# ── Storm Evolution Patterns ───────────────────────────────────────
 # Based on synoptic meteorology of the Eastern Mediterranean
 STORM_PATTERNS = {
     "rapid_onset": {
@@ -58,7 +84,6 @@ STORM_PATTERNS = {
         "d2_fraction": 0.65,
         "d1_fraction": 0.85,
         "d0_fraction": 1.00,
-        "probability": 0.4,
     },
     "gradual_buildup": {
         # Gradual storms: pressure gradient increases over 3-4 days
@@ -70,7 +95,6 @@ STORM_PATTERNS = {
         "d2_fraction": 0.78,
         "d1_fraction": 0.90,
         "d0_fraction": 1.00,
-        "probability": 0.35,
     },
     "persistent": {
         # Persistent strong winds: already elevated, then spike
@@ -82,9 +106,92 @@ STORM_PATTERNS = {
         "d2_fraction": 0.80,
         "d1_fraction": 0.90,
         "d0_fraction": 1.00,
-        "probability": 0.25,
+    },
+    "meltemi": {
+        # Meltemi: sustained strong northerly winds in summer.
+        # Builds slowly over 2-3 days as Azores high strengthens,
+        # remains elevated for days. NOT a transient storm.
+        # Key difference: already elevated at D-5, flat/high throughout.
+        "buildup_days": 5,
+        "d5_fraction": 0.75,
+        "d4_fraction": 0.80,
+        "d3_fraction": 0.85,
+        "d2_fraction": 0.90,
+        "d1_fraction": 0.95,
+        "d0_fraction": 1.00,
+    },
+    "gale_spike": {
+        # Steep-onset gale: very fast intensification (12-24h)
+        # Typical of secondary cyclogenesis or squall lines
+        "buildup_days": 1,
+        "d5_fraction": 0.30,
+        "d4_fraction": 0.30,
+        "d3_fraction": 0.35,
+        "d2_fraction": 0.45,
+        "d1_fraction": 0.70,
+        "d0_fraction": 1.00,
     },
 }
+
+
+def _get_season_for_month(month: int) -> str:
+    """Return season name for a given month."""
+    if month in (12, 1, 2):
+        return "winter"
+    elif month in (3, 4, 5):
+        return "spring"
+    elif month in (6, 7, 8):
+        return "summer"
+    else:
+        return "autumn"
+
+
+def _select_pattern_deterministic(
+    reported_beaufort: int,
+    month: int,
+) -> dict:
+    """
+    Select storm pattern DETERMINISTICALLY based on Beaufort and season.
+
+    This replaces the old random selection which caused inconsistent
+    detection rates at the same Beaufort level.
+
+    Rules:
+    - Summer (Jun-Aug) + any Bf → Meltemi (persistent northerly pattern)
+    - Bf >= 10 → rapid_onset (very intense, fast-developing system)
+    - Bf 9 winter/autumn → rapid_onset (cold front passage)
+    - Bf 9 spring → gradual_buildup
+    - Bf 8 winter → gradual_buildup (typical deep low)
+    - Bf 8 autumn → persistent (established flow)
+    - Bf 8 spring → gradual_buildup
+    - Bf 7 → persistent (marginal, typically pre-existing pattern)
+    - Bf <= 6 → persistent (background wind)
+    """
+    season = _get_season_for_month(month)
+
+    # Summer → Meltemi always
+    if season == "summer":
+        return STORM_PATTERNS["meltemi"]
+
+    if reported_beaufort >= 10:
+        return STORM_PATTERNS["rapid_onset"]
+
+    if reported_beaufort == 9:
+        if season in ("winter", "autumn"):
+            return STORM_PATTERNS["rapid_onset"]
+        else:
+            return STORM_PATTERNS["gradual_buildup"]
+
+    if reported_beaufort == 8:
+        if season == "winter":
+            return STORM_PATTERNS["gradual_buildup"]
+        elif season == "autumn":
+            return STORM_PATTERNS["persistent"]
+        else:
+            return STORM_PATTERNS["gradual_buildup"]
+
+    # Bf <= 7: marginal events, persistent background pattern
+    return STORM_PATTERNS["persistent"]
 
 
 def beaufort_to_knots_mid(bf: int) -> float:
@@ -133,6 +240,9 @@ def estimate_5day_weather(
     """
     Estimate the 5-day weather window leading up to a real event.
 
+    Uses DETERMINISTIC pattern selection (by Beaufort + season) instead of
+    random, and applies route exposure scaling.
+
     Args:
         event_date: Date of the event (YYYY-MM-DD)
         reported_beaufort: Beaufort level reported in news
@@ -145,17 +255,30 @@ def estimate_5day_weather(
     if rng is None:
         rng = random.Random(hash(event_date + route_id))
 
+    # Parse month for seasonal selection
+    try:
+        month = int(event_date.split("-")[1])
+    except (IndexError, ValueError):
+        month = 1
+
     # Convert reported Beaufort to knots
     peak_wind_kn = beaufort_to_knots_mid(reported_beaufort)
-    # Add some variation (news reports are approximate)
-    peak_wind_kn *= rng.uniform(0.9, 1.1)
+    # Tighter variation than before (0.95-1.05 vs 0.9-1.1) — less randomness
+    peak_wind_kn *= rng.uniform(0.95, 1.05)
 
-    # Select storm pattern
-    pattern_name = rng.choices(
-        list(STORM_PATTERNS.keys()),
-        weights=[p["probability"] for p in STORM_PATTERNS.values()],
-    )[0]
-    pattern = STORM_PATTERNS[pattern_name]
+    # Route exposure scaling: exposed routes get slightly higher effective wind
+    route_info = ROUTES.get(route_id, {})
+    if route_info.get("exposed", True):
+        peak_wind_kn *= 1.05  # 5% boost for exposed open-sea routes
+    else:
+        peak_wind_kn *= 0.90  # 10% reduction for sheltered routes
+
+    # Select storm pattern DETERMINISTICALLY (no more random choice)
+    pattern = _select_pattern_deterministic(reported_beaufort, month)
+    pattern_name = next(
+        (k for k, v in STORM_PATTERNS.items() if v is pattern),
+        "unknown"
+    )
 
     # Build daily wind progression
     fractions = [
@@ -177,11 +300,14 @@ def estimate_5day_weather(
     for day_idx, frac in enumerate(fractions):
         day_base_wind = peak_wind_kn * frac
 
-        # Add natural variability
-        day_base_wind *= rng.uniform(0.85, 1.15)
+        # Reduced variability: 0.92-1.08 (was 0.85-1.15)
+        day_base_wind *= rng.uniform(0.92, 1.08)
 
-        # Wave from wind (with lag for early days)
-        wave_lag_factor = 0.8 if day_idx < 3 else 1.0
+        # Wave from wind — no lag penalty for Meltemi (waves already built)
+        if pattern_name == "meltemi":
+            wave_lag_factor = 0.95  # Meltemi seas are already developed
+        else:
+            wave_lag_factor = 0.85 if day_idx < 3 else 1.0
         day_base_wave = wind_to_wave_pm(day_base_wind) * wave_lag_factor
 
         # Generate 24 hourly values
@@ -228,13 +354,19 @@ def estimate_normal_day_weather(
     """
     Estimate weather for a normal sailing day (no ban).
 
-    Uses winter Aegean climatology with variability.
+    Uses SEASONAL Aegean climatology (not just winter).
     Normal days have moderate winds (Bf 3-5) without buildup.
     """
     if rng is None:
         rng = random.Random(hash(event_date + route_id + "normal"))
 
-    baseline = WINTER_AEGEAN_BASELINE
+    # Select seasonal baseline
+    try:
+        month = int(event_date.split("-")[1])
+    except (IndexError, ValueError):
+        month = 1
+    season = _get_season_for_month(month)
+    baseline = SEASONAL_AEGEAN_BASELINE[season]
 
     # Normal day wind: centered around baseline, occasional gusty
     day_mean_wind = max(3, rng.gauss(baseline["mean_wind_kn"], baseline["std_wind_kn"]))

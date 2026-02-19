@@ -29,66 +29,66 @@
     "d5": {
       "label": "5 days before",
       "accuracy": 0.997,
-      "precision": 0.984,
-      "recall": 0.926,
-      "f1": 0.954,
-      "brier_score": 0.0033,
-      "tp": 125,
-      "fp": 2,
-      "tn": 3493,
-      "fn": 10,
+      "precision": 0.956,
+      "recall": 0.97,
+      "f1": 0.963,
+      "brier_score": 0.0022,
+      "tp": 131,
+      "fp": 6,
+      "tn": 3489,
+      "fn": 4,
       "total": 3630
     },
     "d3": {
       "label": "3 days before",
-      "accuracy": 0.997,
-      "precision": 0.984,
-      "recall": 0.926,
-      "f1": 0.954,
-      "brier_score": 0.0033,
-      "tp": 125,
-      "fp": 2,
-      "tn": 3493,
-      "fn": 10,
+      "accuracy": 0.998,
+      "precision": 0.957,
+      "recall": 0.978,
+      "f1": 0.967,
+      "brier_score": 0.002,
+      "tp": 132,
+      "fp": 6,
+      "tn": 3489,
+      "fn": 3,
       "total": 3630
     },
     "d1": {
       "label": "1 day before",
-      "accuracy": 0.997,
-      "precision": 0.97,
-      "recall": 0.956,
-      "f1": 0.963,
-      "brier_score": 0.0027,
-      "tp": 129,
-      "fp": 4,
-      "tn": 3491,
-      "fn": 6,
+      "accuracy": 0.996,
+      "precision": 0.962,
+      "recall": 0.941,
+      "f1": 0.951,
+      "brier_score": 0.0035,
+      "tp": 127,
+      "fp": 5,
+      "tn": 3490,
+      "fn": 8,
       "total": 3630
     },
     "d0": {
       "label": "Departure day",
-      "accuracy": 1.0,
+      "accuracy": 0.996,
       "precision": 1.0,
-      "recall": 0.993,
-      "f1": 0.996,
-      "brier_score": 0.0003,
-      "tp": 134,
+      "recall": 0.896,
+      "f1": 0.945,
+      "brier_score": 0.0039,
+      "tp": 121,
       "fp": 0,
       "tn": 3495,
-      "fn": 1,
+      "fn": 14,
       "total": 3630
     },
     "ensemble": {
       "label": "Ensemble",
-      "accuracy": 0.999,
+      "accuracy": 0.996,
       "precision": 1.0,
-      "recall": 0.985,
-      "f1": 0.993,
-      "brier_score": 0.0007,
-      "tp": 133,
+      "recall": 0.904,
+      "f1": 0.949,
+      "brier_score": 0.0023,
+      "tp": 122,
       "fp": 0,
       "tn": 3495,
-      "fn": 2,
+      "fn": 13,
       "total": 3630
     }
   },
@@ -114,12 +114,12 @@
       "events_count": 10,
       "avg_d0_prob": 1.0,
       "avg_d1_prob": 1.0,
-      "avg_d3_prob": 0.8,
-      "avg_d5_prob": 0.8,
+      "avg_d3_prob": 1.0,
+      "avg_d5_prob": 1.0,
       "detected_d0": "10/10",
       "detected_d1": "10/10",
-      "detected_d3": "8/10",
-      "detected_d5": "8/10"
+      "detected_d3": "10/10",
+      "detected_d5": "10/10"
     },
     "2023-01-18": {
       "beaufort": 9,
@@ -142,12 +142,12 @@
       "events_count": 10,
       "avg_d0_prob": 1.0,
       "avg_d1_prob": 1.0,
-      "avg_d3_prob": 0.801,
-      "avg_d5_prob": 0.8,
+      "avg_d3_prob": 1.0,
+      "avg_d5_prob": 1.0,
       "detected_d0": "10/10",
       "detected_d1": "10/10",
-      "detected_d3": "8/10",
-      "detected_d5": "8/10"
+      "detected_d3": "10/10",
+      "detected_d5": "10/10"
     },
     "2023-02-05": {
       "beaufort": 10,
@@ -182,12 +182,12 @@
       "source": "open-meteo-archive+seasonal-pattern",
       "notes": "Meltemi period mid-July. Strong northerlies Bf8 in central Cyclades. HSC suspended. Based on seasonal Meltemi patterns.",
       "events_count": 10,
-      "avg_d0_prob": 1.0,
-      "avg_d1_prob": 0.968,
+      "avg_d0_prob": 0.1,
+      "avg_d1_prob": 0.502,
       "avg_d3_prob": 1.0,
       "avg_d5_prob": 1.0,
-      "detected_d0": "10/10",
-      "detected_d1": "10/10",
+      "detected_d0": "1/10",
+      "detected_d1": "7/10",
       "detected_d3": "10/10",
       "detected_d5": "10/10"
     },
@@ -196,14 +196,14 @@
       "source": "open-meteo-archive+seasonal-pattern",
       "notes": "Early August Meltemi burst. HSC cancelled on exposed Cyclades routes. Conventional ferries sailed with delays.",
       "events_count": 5,
-      "avg_d0_prob": 0.717,
-      "avg_d1_prob": 0.595,
-      "avg_d3_prob": 0.4,
-      "avg_d5_prob": 0.4,
-      "detected_d0": "4/5",
-      "detected_d1": "3/5",
+      "avg_d0_prob": 0.0,
+      "avg_d1_prob": 0.0,
+      "avg_d3_prob": 0.16,
+      "avg_d5_prob": 0.08,
+      "detected_d0": "0/5",
+      "detected_d1": "0/5",
       "detected_d3": "2/5",
-      "detected_d5": "2/5"
+      "detected_d5": "1/5"
     },
     "2023-09-05": {
       "beaufort": 8,
@@ -211,11 +211,11 @@
       "notes": "Storm Daniel. Primarily flooding event (754mm rain at Zagora, Thessaly). Wind component Bf7-8. Volos port shut. PIR/RAF partial disruptions.",
       "events_count": 10,
       "avg_d0_prob": 1.0,
-      "avg_d1_prob": 0.9,
+      "avg_d1_prob": 0.837,
       "avg_d3_prob": 1.0,
       "avg_d5_prob": 1.0,
       "detected_d0": "10/10",
-      "detected_d1": "9/10",
+      "detected_d1": "10/10",
       "detected_d3": "10/10",
       "detected_d5": "10/10"
     },
@@ -225,13 +225,13 @@
       "notes": "Storm Daniel day 2. Continued disruption. 17 fatalities reported. Athens-Thessaloniki motorway closed.",
       "events_count": 10,
       "avg_d0_prob": 1.0,
-      "avg_d1_prob": 0.9,
-      "avg_d3_prob": 0.9,
-      "avg_d5_prob": 0.9,
+      "avg_d1_prob": 0.96,
+      "avg_d3_prob": 0.935,
+      "avg_d5_prob": 0.94,
       "detected_d0": "10/10",
-      "detected_d1": "9/10",
-      "detected_d3": "9/10",
-      "detected_d5": "9/10"
+      "detected_d1": "10/10",
+      "detected_d3": "10/10",
+      "detected_d5": "10/10"
     },
     "2023-09-11": {
       "beaufort": 9,
@@ -267,13 +267,13 @@
       "notes": "Late autumn storm. Blue Star Myconos delayed 16:00\u219221:00. Hellenic Highspeed from Syros cancelled. Diagoras PIR\u2192Chios cancelled. Nissos Samos Mytilene\u2192PIR cancelled. Extensive disruptions.",
       "events_count": 10,
       "avg_d0_prob": 1.0,
-      "avg_d1_prob": 0.925,
-      "avg_d3_prob": 0.9,
-      "avg_d5_prob": 0.9,
+      "avg_d1_prob": 0.952,
+      "avg_d3_prob": 1.0,
+      "avg_d5_prob": 1.0,
       "detected_d0": "10/10",
-      "detected_d1": "9/10",
-      "detected_d3": "9/10",
-      "detected_d5": "9/10"
+      "detected_d1": "10/10",
+      "detected_d3": "10/10",
+      "detected_d5": "10/10"
     },
     "2023-11-26": {
       "beaufort": 8,
@@ -281,45 +281,45 @@
       "notes": "Continuation of Nov 25 storm. Blue Star Delos PIR\u2192Paros/Naxos/Ios cancelled. Blue Star Chios PIR\u2192Syros/Tinos/Mykonos cancelled.",
       "events_count": 10,
       "avg_d0_prob": 1.0,
-      "avg_d1_prob": 0.9,
-      "avg_d3_prob": 0.9,
-      "avg_d5_prob": 0.9,
+      "avg_d1_prob": 0.92,
+      "avg_d3_prob": 1.0,
+      "avg_d5_prob": 1.0,
       "detected_d0": "10/10",
-      "detected_d1": "9/10",
-      "detected_d3": "9/10",
-      "detected_d5": "9/10"
+      "detected_d1": "10/10",
+      "detected_d3": "10/10",
+      "detected_d5": "10/10"
     }
   },
   "early_warning": {
     "d5": {
       "label": "5 days before",
-      "detected": 125,
+      "detected": 131,
       "total": 135,
-      "detection_rate": 0.926
+      "detection_rate": 0.97
     },
     "d3": {
       "label": "3 days before",
-      "detected": 125,
+      "detected": 132,
       "total": 135,
-      "detection_rate": 0.926
+      "detection_rate": 0.978
     },
     "d1": {
       "label": "1 day before",
-      "detected": 129,
+      "detected": 127,
       "total": 135,
-      "detection_rate": 0.956
+      "detection_rate": 0.941
     },
     "d0": {
       "label": "Departure day",
-      "detected": 134,
+      "detected": 121,
       "total": 135,
-      "detection_rate": 0.993
+      "detection_rate": 0.896
     },
     "ensemble": {
       "label": "Ensemble",
-      "detected": 133,
+      "detected": 122,
       "total": 135,
-      "detection_rate": 0.985
+      "detection_rate": 0.904
     }
   },
   "strike_analysis": {
